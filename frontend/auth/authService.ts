@@ -1,3 +1,4 @@
+import { User } from "../../src/types/user";
 import { apiFetch } from "../api/apiClient";
 
 interface LoginPayload {
@@ -13,7 +14,7 @@ interface RegisterUser {
 
 interface LoginResponse {
   token: string;
-  user_id: string;
+  user: User;
 }
 interface RegisterResponse {
   id: string;
@@ -27,11 +28,13 @@ export async function login(payload: LoginPayload): Promise<LoginResponse> {
   });
 }
 
-export async function register(payload: RegisterUser): Promise<RegisterResponse> {
+export async function signup(payload: RegisterUser): Promise<RegisterResponse> {
   return apiFetch<RegisterResponse>("/auth/register", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
+
+
 
 

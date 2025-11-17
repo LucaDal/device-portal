@@ -1,0 +1,38 @@
+.home-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(100vh - 60px); /* meno header */
+  padding: 2rem;
+  background: #0d1117; /* dark */
+}
+
+.home-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  padding: 2.5rem 3rem;
+  border-radius: 16px;
+  text-align: center;
+  color: #e6edf3;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  animation: fadeIn 0.4s ease;
+}
+
+.home-title {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.home-subtitle {
+  color: #8b949e;
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+/* Animazione semplice */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

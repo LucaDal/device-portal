@@ -1,0 +1,142 @@
+/* ===== Global Reset ===== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: 'Inter', sans-serif;
+}
+
+body {
+  background-color: #1f2937; /* dark gray */
+  color: #f3f4f6; /* light text */
+  line-height: 1.6;
+}
+
+/* ===== Header ===== */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background-color: #111827; /* darker header */
+  box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+
+.header h1 {
+  color: #f3f4f6;
+}
+
+.header nav span {
+  margin-right: 1rem;
+  font-weight: 500;
+  color: #d1d5db;
+}
+
+.header nav a {
+  margin-right: 1rem;
+  text-decoration: none;
+  color: #3b82f6;
+}
+
+.header nav a:hover {
+  color: #60a5fa;
+}
+
+.header nav button {
+  background-color: #3b82f6;
+  color: #f3f4f6;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.header nav button:hover {
+  background-color: #2563eb;
+}
+
+/* ===== Layout ===== */
+.layout {
+  display: flex;
+}
+
+/* ===== Sidebar ===== */
+.sidebar {
+  width: 220px;
+  background-color: #111827;
+  padding: 1rem;
+  border-right: 1px solid #374151;
+  height: calc(100vh - 64px); /* full height minus header */
+}
+
+.sidebar ul {
+  list-style: none;
+  padding: 0;
+}
+
+.sidebar li {
+  margin-bottom: 1rem;
+}
+
+.sidebar a {
+  text-decoration: none;
+  color: #3b82f6;
+}
+
+.sidebar a:hover {
+  color: #60a5fa;
+}
+
+/* ===== Main Content ===== */
+.main-content {
+  flex: 1;
+  padding: 2rem;
+  background-color: #1f2937;
+}
+
+/* ===== Buttons & Inputs ===== */
+button, input, select, textarea {
+  font-family: 'Inter', sans-serif;
+}
+
+input, select, textarea {
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid #374151;
+  background-color: #1f2937;
+  color: #f3f4f6;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.3);
+}
+
+/* ===== Links Hover ===== */
+a {
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 768px) {
+  .layout {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid #374151;
+  }
+  .main-content {
+    padding: 1rem;
+  }
+}

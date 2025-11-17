@@ -19,9 +19,9 @@ export default function DeviceCreator() {
   const handleSubmit = async () => {
     try {
       const res = await addDevice({ type_id, owner_id, firmware_version, firmware_build});
-      alert("Device creato!");
+      alert("Device created");
     } catch (err: any) {
-      alert(err.error || "Login fallito");
+      alert(err.error || "Request failed");
     }
   };
 

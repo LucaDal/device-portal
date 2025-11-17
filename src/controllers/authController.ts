@@ -10,7 +10,7 @@ export const AuthController = {
 
     try {
       const stmt = DB.prepare("INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)");
-      const info = stmt.run(email, hash, role || "user");
+      const info = stmt.run(email, hash, role);
       res.send({ id: info.lastInsertRowid });
     } catch {
       res.status(400).send({ error: "Email already exists" });
@@ -26,6 +26,6 @@ export const AuthController = {
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).send({ error: "invalid" });
 
-    res.send({ token: generateToken(row), user_id: row.id });
+    res.send({ token: generateToken(row), row });
   }
 };

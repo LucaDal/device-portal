@@ -1,8 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import "../style/index.css";
-import { AuthProvider } from "../auth/AuthContext";
+import "./style/index.css";
+import { AuthProvider } from "./auth/AuthContext";
 
 const root = document.getElementById("root");
 if (root) {

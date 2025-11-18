@@ -1,0 +1,38 @@
+{
+  "name": "device-portal",
+  "dependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/body-parser": "^1.19.6",
+    "ajv": "^8.12.0",
+    "bcrypt": "^5.1.0",
+    "better-sqlite3": "^8.1.0",
+    "body-parser": "^1.20.2",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/jsonwebtoken": "^9.0.10",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.1.3"
+  },
+  "scripts": {
+    "dev": "pm2 start ecosystem.config.cjs --only device-portal-dev",
+    "start": "pm2 start ecosystem.config.cjs --only device-portal-prod",
+    "restart": "pm2 restart device-portal",
+    "stopdev": "pm2 stop device-portal-dev",
+    "stop": "pm2 stop device-portal-prod",
+    "reload": "npm run clean && npm run build && npm run start",
+    "logs": "pm2 logs device-portal",
+    "delete": "pm2 delete device-portal",
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "bugs": {
+    "url": "https://github.com/LucaDal/device-portal/issues"
+  },
+  "homepage": "https://github.com/LucaDal/device-portal#readme"
+}

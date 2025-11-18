@@ -9,7 +9,11 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    "baseUrl": ".",                        // radice del frontend
+    "paths": {
+      "@shared/*": ["../shared/*"]         // alias per shared
+    }
   },
-  "include": ["src/**/*", "src/App.tsx"]
+  "include": ["src/**/*"]
 }

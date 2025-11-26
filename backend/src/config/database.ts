@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { ensureAdminUser} from "./bootstrap";
 
 export const DB = new Database("./data.db");
 
@@ -28,3 +29,4 @@ CREATE TABLE IF NOT EXISTS devices (
   FOREIGN KEY(device_type_id) REFERENCES device_types(id)
 );
 `);
+ensureAdminUser();

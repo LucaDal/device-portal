@@ -2,13 +2,11 @@
 # Node modules
 # ========================
 node_modules/
-**/node_modules/
 
 # ========================
 # Build output
 # ========================
-frontend/dist/
-backend/dist/
+dist/
 
 # ========================
 # Logs

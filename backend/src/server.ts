@@ -4,6 +4,7 @@ import { logger } from "./middleware/logger";
 import authRoutes from "./routes/authRoutes";
 import deviceRoutes from "./routes/deviceRoutes";
 import deviceTypeRoutes from "./routes/deviceTypeRoutes";
+import managementRoutes from "./routes/managementRoute";
 import "./config/database"; // inizializza DB
 import { JwtPayload } from "jsonwebtoken";
 
@@ -21,6 +22,7 @@ app.use(logger);
 
 // Routes
 app.use("/auth", authRoutes);
+app.use("/manage", managementRoutes);
 app.use("/devices", deviceRoutes);
 app.use("/device-types", deviceTypeRoutes);
 

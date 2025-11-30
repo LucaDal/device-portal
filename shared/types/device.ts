@@ -1,16 +1,20 @@
 import { DeviceType } from "./device_type";
 
 export interface Device {
-  id: string;
-  type: DeviceType;
-  owner_id: number | null;
-  firmware_version: string;
-  firmware_build: File | null;
-  activated: boolean;
-}
-export interface DevicePayload {
+  code: string;
   type_id: number;
   owner_id: number | null;
-  firmware_version: string;
-  firmware_build: File | null;
 }
+
+export interface DeviceWithRelations {
+    code: string;
+    device_type_id: number;
+    owner_id?: number | null;
+    activated: number; // 0/1
+
+    device_type_description?: string | null;
+    firmware_version?: string;
+    type_properties?: string | Record<string, unknown> | null;
+    device_properties?: string | Record<string, unknown> | null;
+}
+

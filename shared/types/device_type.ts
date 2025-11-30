@@ -1,8 +1,7 @@
 export interface DeviceType {
     id: number;
     description: string;
-}
-
-export interface DeviceTypePayload {
-    description: string | null;
+    firmware_version: string;
+    created_at: string;
+    properties?: string
 }

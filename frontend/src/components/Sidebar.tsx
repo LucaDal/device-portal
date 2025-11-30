@@ -12,11 +12,12 @@ const Sidebar = () => {
             <ul>
                 <li><Link to="/">Home</Link></li>
                 <li><Link to="/devices">Devices</Link></li>
+                <li><Link to="/add-device">Add Device</Link></li>
                 {user.role === "admin" &&
                     <li><Link to="/users">Users</Link></li>
                 }
                 {["admin", "dev"].includes(user.role) &&
-                    <li><Link to="/dev-tools">Dev Tools</Link></li>
+                    <li><Link to="/device-types">Device Types</Link></li>
                 }
             </ul>
         </aside>

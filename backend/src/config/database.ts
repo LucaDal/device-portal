@@ -4,29 +4,36 @@ import { ensureAdminUser} from "./bootstrap";
 export const DB = new Database("./data.db");
 
 DB.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  email TEXT UNIQUE,
-  password_hash TEXT,
-  role TEXT DEFAULT 'user',
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE,
+        password_hash TEXT,
+        role TEXT DEFAULT 'user',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
 
-CREATE TABLE IF NOT EXISTS device_types (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  description TEXT
-);
+    CREATE TABLE IF NOT EXISTS device_types (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        firmware_version TEXT NOT NULL,
+        firmware_build BLOB NOT NULL,
+        properties TEXT,
+        description TEXT
+    );
 
-CREATE TABLE IF NOT EXISTS devices (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_type_id INTEGER NOT NULL,
-  firmware_version TEXT,
-  firmware_build BLOB,
-  owner_id INTEGER,
-  activated INTEGER DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY(owner_id) REFERENCES users(id),
-  FOREIGN KEY(device_type_id) REFERENCES device_types(id)
-);
+    CREATE TABLE IF NOT EXISTS devices (
+        code TEXT PRIMARY KEY,
+        device_type_id INTEGER NOT NULL,
+        owner_id INTEGER,
+        activated INTEGER DEFAULT 0,
+        FOREIGN KEY(owner_id) REFERENCES users(id),
+        FOREIGN KEY(device_type_id) REFERENCES device_types(id)
+    );
+    CREATE TABLE IF NOT EXISTS device_properties (
+        id INTEGER PRIMARY KEY,
+        device_code INTEGER NOT NULL,
+        properties TEXT,
+        FOREIGN KEY(device_code) REFERENCES devices(code) ON DELETE CASCADE
+    );
 `);
 ensureAdminUser();

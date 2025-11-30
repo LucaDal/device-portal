@@ -5,9 +5,11 @@ import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import SignupPage from "./pages/SignupPage";
 import ProtectedRoute from "./components/ProtectedRoute";
-import AdminDashboard from "./pages/AdminDashboard";
 import AccessDenied from "./pages/AccessDenied";
 import UsersManagementPage from "./pages/UsersManagementPage";
+import DeviceTypesPage from "./pages/DeviceTypesPage";
+import DevicesPage from "./pages/DevicePage";
+import AddDevicePage from "./pages/AddDevicePage";
 
 function LayoutWrapper() {
     const location = useLocation();
@@ -31,15 +33,14 @@ function LayoutWrapper() {
                         <Route path="/signup" element={<SignupPage />} />
                         <Route path="/access-denied" element={<AccessDenied />} />
                         <Route path="/users" element={<UsersManagementPage/>}/>
-                        <Route
-                            path="/admin"
-                            element={
+                        <Route path="/devices" element={<DevicesPage/>}/>
+                        <Route path="/add-device" element={<AddDevicePage />} />
+                        <Route path="/device-types" element={
                                 <ProtectedRoute allowedRoles={["admin"]}>
-                                    <AdminDashboard />
+                                    <DeviceTypesPage />
                                 </ProtectedRoute>
-                            }
-                        />
-                    </Routes>
+                                }/>
+                        </Routes>
                 </main>
             </div>
         </>

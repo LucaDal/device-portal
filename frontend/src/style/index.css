@@ -18,7 +18,7 @@ html, body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 1rem 2rem;
+    padding: 0.3rem 1rem;
     background-color: #111827; /* darker header */
     box-shadow: 0 2px 4px rgba(0,0,0,0.5);
     position: sticky;

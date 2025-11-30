@@ -1,6 +1,6 @@
 import { DB } from "../config/database";
 import bcrypt from "bcrypt";
-import { User, UserRole } from "@shared/types/user";
+import { UserRole } from "@shared/types/user";
 
 export class UsersController {
     static createUser(email: string, password: string, role: string = "user") {

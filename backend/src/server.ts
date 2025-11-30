@@ -17,13 +17,12 @@ declare global {
 }
 
 const app = express();
-app.use(bodyParser.json());
 app.use(logger);
 
 // Routes
-app.use("/auth", authRoutes);
-app.use("/manage", managementRoutes);
-app.use("/devices", deviceRoutes);
+app.use("/auth", bodyParser.json(),  authRoutes);
+app.use("/manage", bodyParser.json(), managementRoutes);
+app.use("/devices", bodyParser.json(), deviceRoutes);
 app.use("/device-types", deviceTypeRoutes);
 
 app.listen(3000, () => console.log("Server running on port 3000"));

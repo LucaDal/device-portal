@@ -1,19 +1,14 @@
-import { DeviceType } from "@shared/types/device_type";
 import { useEffect, useState, FormEvent, ChangeEvent } from "react";
-import "../style/DeviceTypesPage.css";
+import { DeviceType } from "@shared/types/device_type";
+import { PropertyRow, PropertyType } from "@shared/types/properties";
 import { getDeviceTypes, updateDeviceType } from "../devices/deviceService";
+import "../style/DeviceTypesPage.css";
 
 type FormMode = "create" | "edit";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-type PropertyValueType = "string" | "int" | "float" | "bool";
-type PropertyRow = {
-    key: string;
-    type: PropertyValueType;
-};
 
 const DeviceTypesPage: React.FC = () => {
-
     const [propertiesMode, setPropertiesMode] = useState(false);
     const [properties, setProperties] = useState<PropertyRow[]>([]);
 
@@ -24,6 +19,7 @@ const DeviceTypesPage: React.FC = () => {
     const [formMode, setFormMode] = useState<FormMode>("create");
     const [selectedDevice, setSelectedDevice] = useState<DeviceType | null>(null);
 
+    const [typeId, setTypeId] = useState("");
     const [description, setDescription] = useState("");
     const [firmwareVersion, setFirmwareVersion] = useState("");
     const [firmwareFile, setFirmwareFile] = useState<File | null>(null);
@@ -31,6 +27,7 @@ const DeviceTypesPage: React.FC = () => {
     const [submitting, setSubmitting] = useState(false);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+    // properties nel DB: { key: "string" | "int" | ... }
     const parseProperties = (raw: unknown): PropertyRow[] => {
         if (!raw) return [];
         try {
@@ -38,13 +35,18 @@ const DeviceTypesPage: React.FC = () => {
 
             if (obj && typeof obj === "object" && !Array.isArray(obj)) {
                 return Object.entries(obj).map(([key, value]) => {
-                    let type: PropertyValueType = "string";
+                    let type: PropertyType = PropertyType.STRING;
+                    const v = String(value);
 
-                    if (value === "int" || value === "float" || value === "bool" || value === "string") {
-                        type = value;
+                    if (
+                        v === PropertyType.INT ||
+                        v === PropertyType.FLOAT ||
+                        v === PropertyType.BOOL ||
+                        v === PropertyType.STRING
+                    ) {
+                        type = v as PropertyType;
                     } else {
-                        // fallback se nel JSON c'è altro (vecchia versione)
-                        type = "string";
+                        type = PropertyType.STRING;
                     }
 
                     return {
@@ -80,12 +82,15 @@ const DeviceTypesPage: React.FC = () => {
     const resetForm = () => {
         setDescription("");
         setFirmwareVersion("");
+        setTypeId("");
         setFirmwareFile(null);
         setFormMode("create");
         setSelectedDevice(null);
         setPropertiesMode(false);
         setProperties([]);
+        setError(null);
     };
+
     const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0] || null;
         if (!file) {
@@ -109,7 +114,7 @@ const DeviceTypesPage: React.FC = () => {
         setError(null);
         setSuccessMessage(null);
 
-        if (!description.trim() || !firmwareVersion.trim()) {
+        if (!firmwareVersion.trim() || !typeId.trim()) {
             setError("Compila tutti i campi obbligatori.");
             return;
         }
@@ -128,6 +133,7 @@ const DeviceTypesPage: React.FC = () => {
         try {
             setSubmitting(true);
             const formData = new FormData();
+            formData.append("id", typeId);
             formData.append("description", description);
             formData.append("firmware_version", firmwareVersion);
             if (firmwareFile) {
@@ -158,20 +164,20 @@ const DeviceTypesPage: React.FC = () => {
         setSelectedDevice(device);
         setDescription(device.description || "");
         setFirmwareVersion(device.firmware_version || "");
+        setTypeId(device.id ? String(device.id) : "");
         setFirmwareFile(null);
         setSuccessMessage(null);
         setError(null);
     };
 
     const handleDelete = async (device: DeviceType) => {
-        if (!window.confirm(`Eliminare il device type "${device.description}"?`)) {
+        if (!window.confirm(`Eliminare il device type "${device.id}"?`)) {
             return;
         }
 
         try {
             setError(null);
             setSuccessMessage(null);
-
 
             await updateDeviceType(`/${device.id}`, "DELETE");
             setSuccessMessage("Device type eliminato.");
@@ -183,16 +189,15 @@ const DeviceTypesPage: React.FC = () => {
             setError(err.error || "Errore imprevisto durante l'eliminazione.");
         }
     };
+
     // PROPERTIES ================
     const handleProperties = (device: DeviceType) => {
         setFormMode("edit");
         setSelectedDevice(device);
         setPropertiesMode(true);
 
-        // se vuoi mostrare anche description/version sopra alle properties:
         setDescription(device.description || "");
         setFirmwareVersion(device.firmware_version || "");
-
         setFirmwareFile(null);
         setProperties(parseProperties(device.properties));
         setSuccessMessage(null);
@@ -202,7 +207,7 @@ const DeviceTypesPage: React.FC = () => {
     const handleAddProperty = () => {
         setProperties((prev) => [
             ...prev,
-            { key: "", type: "string" },
+            { key: "", type: PropertyType.STRING },
         ]);
     };
 
@@ -214,7 +219,7 @@ const DeviceTypesPage: React.FC = () => {
         );
     };
 
-    const handlePropertyTypeChange = (index: number, newType: PropertyValueType) => {
+    const handlePropertyTypeChange = (index: number, newType: PropertyType) => {
         setProperties((prev) =>
             prev.map((p, i) =>
                 i === index ? { ...p, type: newType } : p
@@ -225,6 +230,7 @@ const DeviceTypesPage: React.FC = () => {
     const handleRemoveProperty = (index: number) => {
         setProperties((prev) => prev.filter((_, i) => i !== index));
     };
+
     const handlePropertiesSubmit = async (e: FormEvent) => {
         e.preventDefault();
         setError(null);
@@ -240,13 +246,14 @@ const DeviceTypesPage: React.FC = () => {
 
             const formData = new FormData();
 
+            // nel DB salvi solo il tipo per ogni chiave
             const propsObj: Record<string, string> = {};
 
             for (const row of properties) {
                 const k = row.key.trim();
                 if (!k) continue; // salta righe senza chiave
 
-                propsObj[k] = row.type; // 👈 solo il tipo
+                propsObj[k] = row.type; // enum -> string
             }
 
             formData.append("description", description);
@@ -260,13 +267,12 @@ const DeviceTypesPage: React.FC = () => {
         } catch (err: any) {
             setError(
                 err.error ||
-                    "Errore imprevisto durante il salvataggio delle proprietà."
+                "Errore imprevisto durante il salvataggio delle proprietà."
             );
         } finally {
             setSubmitting(false);
         }
     };
-
 
     return (
         <div className="device-types-page">
@@ -313,7 +319,6 @@ const DeviceTypesPage: React.FC = () => {
                     {propertiesMode ? (
                         // === FORM PROPERTIES (solo proprietà) ===
                         <form className="dt-form" onSubmit={handlePropertiesSubmit}>
-                            {/* opzionale: piccolo riepilogo non editabile */}
                             {selectedDevice && (
                                 <div className="dt-form-group">
                                     <div className="dt-summary">
@@ -339,7 +344,7 @@ const DeviceTypesPage: React.FC = () => {
                                         {/* KEY */}
                                         <input
                                             type="text"
-                                            placeholder="Chiave (es. maxTemp)"
+                                            placeholder="Key (es. maxTemp)"
                                             value={p.key}
                                             onChange={(e) =>
                                                 handlePropertyChange(index, e.target.value)
@@ -352,14 +357,14 @@ const DeviceTypesPage: React.FC = () => {
                                             onChange={(e) =>
                                                 handlePropertyTypeChange(
                                                     index,
-                                                    e.target.value as PropertyValueType
+                                                    e.target.value as PropertyType
                                                 )
                                             }
                                         >
-                                            <option value="string">string</option>
-                                            <option value="int">int</option>
-                                            <option value="float">float</option>
-                                            <option value="bool">bool</option>
+                                            <option value={PropertyType.STRING}>string</option>
+                                            <option value={PropertyType.INT}>int</option>
+                                            <option value={PropertyType.FLOAT}>float</option>
+                                            <option value={PropertyType.BOOL}>bool</option>
                                         </select>
 
                                         <button
@@ -394,69 +399,81 @@ const DeviceTypesPage: React.FC = () => {
                                 {submitting ? "Salvataggio..." : "Salva proprietà"}
                             </button>
                         </form>
-                    ) : (                            // === FORM FIRMWARE ORIGINALE ===
-                            <form className="dt-form" onSubmit={handleSubmit}>
-                                <div className="dt-form-group">
-                                    <label htmlFor="description">Descrizione</label>
+                    ) : (
+                        // === FORM FIRMWARE ORIGINALE ===
+                        <form className="dt-form" onSubmit={handleSubmit}>
+                            <div className="dt-form-group">
+                                <label htmlFor="type-id">Type ID</label>
+                                <input
+                                    id="type-id"
+                                    type="text"
+                                    value={typeId}
+                                    onChange={(e) => setTypeId(e.target.value)}
+                                    placeholder="Es. tipo_1, gateway, ..."
+                                />
+                            </div>
+                            <div className="dt-form-group">
+                                <label htmlFor="description">Descrizione</label>
+                                <input
+                                    id="description"
+                                    type="text"
+                                    value={description}
+                                    onChange={(e) => setDescription(e.target.value)}
+                                    placeholder="Es. Controller ambiente, Gateway, ..."
+                                />
+                            </div>
+
+                            <div className="dt-form-group">
+                                <label htmlFor="firmwareVersion">Firmware version</label>
+                                <input
+                                    id="firmwareVersion"
+                                    type="text"
+                                    value={firmwareVersion}
+                                    onChange={(e) => setFirmwareVersion(e.target.value)}
+                                    placeholder="Es. 1.0.0, 2.1.3, ..."
+                                />
+                            </div>
+
+                            <div className="dt-form-group">
+                                <label htmlFor="firmwareFile">
+                                    Firmware file{" "}
+                                    {formMode === "create" && (
+                                        <span className="dt-chip">obbligatorio</span>
+                                    )}
+                                </label>
+
+                                <div className="dt-file-input">
                                     <input
-                                        id="description"
-                                        type="text"
-                                        value={description}
-                                        onChange={(e) => setDescription(e.target.value)}
-                                        placeholder="Es. Controller ambiente, Gateway, ..."
+                                        id="firmwareFile"
+                                        type="file"
+                                        onChange={handleFileChange}
+                                        accept=".bin,*/*"
                                     />
                                 </div>
 
-                                <div className="dt-form-group">
-                                    <label htmlFor="firmwareVersion">Firmware version</label>
-                                    <input
-                                        id="firmwareVersion"
-                                        type="text"
-                                        value={firmwareVersion}
-                                        onChange={(e) => setFirmwareVersion(e.target.value)}
-                                        placeholder="Es. 1.0.0, 2.1.3, ..."
-                                    />
+                                <small className="dt-help-text">
+                                    Massimo 10MB.
+                                </small>
+                            </div>
+
+                            {error && <div className="dt-alert dt-alert-error">{error}</div>}
+                            {successMessage && (
+                                <div className="dt-alert dt-alert-success">
+                                    {successMessage}
                                 </div>
+                            )}
 
-                                <div className="dt-form-group">
-                                    <label htmlFor="firmwareFile">
-                                        Firmware file{" "}
-                                        {formMode === "create" && (
-                                            <span className="dt-chip">obbligatorio</span>
-                                        )}
-                                    </label>
-
-                                    <div className="dt-file-input">
-                                        <input
-                                            id="firmwareFile"
-                                            type="file"
-                                            onChange={handleFileChange}
-                                            accept=".bin,*/*"
-                                        />
-                                    </div>
-
-                                    <small className="dt-help-text">
-                                        Massimo 10MB.
-                                    </small>
-                                </div>
-
-                                {error && <div className="dt-alert dt-alert-error">{error}</div>}
-                                {successMessage && (
-                                    <div className="dt-alert dt-alert-success">
-                                        {successMessage}
-                                    </div>
-                                )}
-
-                                <button
-                                    type="submit"
-                                    className="dt-btn dt-btn-primary"
-                                    disabled={submitting}
-                                >
-                                    {submitting ? "Salvataggio..." : "Salva"}
-                                </button>
-                            </form>
-                        )}
+                            <button
+                                type="submit"
+                                className="dt-btn dt-btn-primary"
+                                disabled={submitting}
+                            >
+                                {submitting ? "Salvataggio..." : "Salva"}
+                            </button>
+                        </form>
+                    )}
                 </section>
+
                 {/* TABLE CARD */}
                 <section className="dt-card dt-table-card">
                     <div className="dt-table-header">
@@ -469,54 +486,54 @@ const DeviceTypesPage: React.FC = () => {
                     {loading ? (
                         <div className="dt-loading">Caricamento...</div>
                     ) : deviceTypes.length === 0 ? (
-                            <p className="dt-empty">Nessun device type presente.</p>
-                        ) : (
-                                <div className="dt-table-wrapper">
-                                    <table className="dt-table">
-                                        <thead>
-                                            <tr>
-                                                <th>ID</th>
-                                                <th>Description</th>
-                                                <th>Firmware</th>
-                                                <th>Created</th>
-                                                <th>Azione</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {deviceTypes.map((dt) => (
-                                                <tr key={dt.id}>
-                                                    <td>#{dt.id}</td>
-                                                    <td>{dt.description}</td>
-                                                    <td>{dt.firmware_version}</td>
-                                                    <td>{dt.created_at}</td>
-                                                    <td>
-                                                        <div className="dt-actions">
-                                                            <button
-                                                                className="dt-btn dt-btn-xs"
-                                                                onClick={() => handleEdit(dt)}
-                                                            >
-                                                                Modifica
-                                                            </button>
-                                                            <button
-                                                                className="dt-btn dt-btn-xs"
-                                                                onClick={() => handleProperties(dt)}
-                                                            >
-                                                                Properties
-                                                            </button>
-                                                            <button
-                                                                className="dt-btn dt-btn-xs dt-btn-danger"
-                                                                onClick={() => handleDelete(dt)}
-                                                            >
-                                                                Elimina
-                                                            </button>
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
+                        <p className="dt-empty">Nessun device type presente.</p>
+                    ) : (
+                        <div className="dt-table-wrapper">
+                            <table className="dt-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Description</th>
+                                        <th>Firmware</th>
+                                        <th>Created</th>
+                                        <th>Azione</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {deviceTypes.map((dt) => (
+                                        <tr key={dt.id}>
+                                            <td>{dt.id}</td>
+                                            <td>{dt.description}</td>
+                                            <td>{dt.firmware_version}</td>
+                                            <td>{dt.created_at}</td>
+                                            <td>
+                                                <div className="dt-actions">
+                                                    <button
+                                                        className="dt-btn dt-btn-xs"
+                                                        onClick={() => handleEdit(dt)}
+                                                    >
+                                                        Modifica
+                                                    </button>
+                                                    <button
+                                                        className="dt-btn dt-btn-xs"
+                                                        onClick={() => handleProperties(dt)}
+                                                    >
+                                                        Properties
+                                                    </button>
+                                                    <button
+                                                        className="dt-btn dt-btn-xs dt-btn-danger"
+                                                        onClick={() => handleDelete(dt)}
+                                                    >
+                                                        Elimina
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
                 </section>
             </div>
         </div>

@@ -1,4 +1,5 @@
 import { DB } from "../config/database";
+import crypto from "crypto";
 
 export const DeviceController = {
 
@@ -6,7 +7,6 @@ export const DeviceController = {
     list(req: any, res: any) {
         const userId = Number((req.user as any).id);
         const role = (req.user as any).role;
-
         // query base (senza WHERE)
         let sql = `
             SELECT
@@ -147,33 +147,19 @@ WHERE code = ?
         ).get(code);
 
         if (existingProps) {
-            DB.prepare(`
-UPDATE device_properties
-SET properties = ?
-WHERE device_code = ?
-`).run(propertiesJson, code);
+            DB.prepare(`UPDATE device_properties
+                            SET properties = ?
+                            WHERE device_code = ?
+            `).run(propertiesJson, code);
         } else {
             DB.prepare(`
-INSERT INTO device_properties (device_code, properties)
-VALUES (?, ?)
-`).run(code, propertiesJson);
+                INSERT INTO device_properties (device_code, properties)
+                VALUES (?, ?)
+            `).run(code, propertiesJson);
         }
 
         res.json({ ok: true });
     },
-
-
-    getProperties(req: any, res: any) {
-        const { code } = req.params
-        const data = DB.prepare(
-            "SELECT properties FROM device_properties WHERE device_code = ?"
-        ).get(code);
-        if(data){
-            res.json((data as any).properties);
-        }else{
-            res.status(400).json({ error: "Device not found" });
-        }
-    }
 };
 
 

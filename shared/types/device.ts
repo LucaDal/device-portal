@@ -2,7 +2,7 @@ import { DeviceType } from "./device_type";
 
 export interface Device {
   code: string;
-  type_id: number;
+  type_id: string;
   owner_id: number | null;
 }
 

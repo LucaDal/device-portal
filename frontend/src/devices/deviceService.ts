@@ -9,6 +9,7 @@ export const getDeviceTypes = async (): Promise<DeviceType[]> => {
         method: "GET"
     });
 };
+
 export const updateDeviceType = async (url: string, method: string, formData?: FormData | null): Promise<Response> => {
     return apiFetchFD(`${DT_URL}${url}`,method, formData);
 };
@@ -20,7 +21,7 @@ export async function getDevices(): Promise<DeviceWithRelations[]> {
 
 export async function createDevice(payload: {
     code: string;
-    device_type_id: number;
+    device_type_id: string;
     owner_id?: number | null;
     activated?: boolean;
 }) {

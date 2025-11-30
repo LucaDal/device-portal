@@ -1,6 +1,6 @@
 export interface DeviceType {
-    id: number;
-    description: string;
+    id: string;
+    description?: string;
     firmware_version: string;
     created_at: string;
     properties?: string

@@ -12,19 +12,19 @@ export const DeviceTypeController = {
             return res.status(400).send({ error: "File too large (max 10MB)" });
         }
 
-        const { description, firmware_version } = req.body;
+        const { id, description, firmware_version } = req.body;
         const firmware_build = req.file?.buffer;
 
-        if (!description || !firmware_version || !firmware_build) {
+        if (!id || !firmware_version || !firmware_build) {
             return res.status(400).send({ error: "Missing fields" });
         }
 
         const stmt = DB.prepare(`
-                INSERT INTO device_types (firmware_version, firmware_build, description)
-                VALUES (?, ?, ?)
+                INSERT INTO device_types (id, firmware_version, firmware_build, description)
+                VALUES (?, ?, ?, ?)
             `);
 
-        const info = stmt.run(firmware_version, firmware_build, description);
+        const info = stmt.run(id, firmware_version, firmware_build, description);
 
         res.send({
             id: info.lastInsertRowid,
@@ -36,12 +36,8 @@ export const DeviceTypeController = {
     // PUT /device-types/:id
     update(req: any, res: any) {
         const { id } = req.params;
-        const numericId = Number(id);
 
-        if (!Number.isInteger(numericId)) {
-            return res.status(400).json({ error: "ID non valido" });
-        }
-
+        console.info(id);
         // Limite dimensione file: 10MB
         const MAX_SIZE = 10 * 1024 * 1024;
         if (req.file && req.file.size > MAX_SIZE) {
@@ -54,7 +50,7 @@ export const DeviceTypeController = {
         const firmware_build = req.file?.buffer ?? null;
         const propertiesJson = req.body.properties ?? "{}"; // stringa JSON
 
-        if (!description?.trim() || !firmware_version?.trim()) {
+        if (!firmware_version?.trim()) {
             return res
                 .status(400)
                 .json({ error: "Campi obbligatori mancanti" });
@@ -68,18 +64,18 @@ export const DeviceTypeController = {
         } catch {
             return res
                 .status(400)
-                .json({ error: "properties non è un JSON valido" });
+                .json({ error: "properties is not a valid JSON" });
         }
 
         // Verifica che il device type esista
         const existing = DB.prepare(
             "SELECT id FROM device_types WHERE id = ?"
-        ).get(numericId);
+        ).get(id);
 
         if (!existing) {
             return res
                 .status(400)
-                .json({ error: "Device type non trovato" });
+                .json({ error: "Device type not found" });
         }
 
         // Costruzione dinamica dell'UPDATE
@@ -95,7 +91,7 @@ export const DeviceTypeController = {
             params.push(firmware_build);
         }
 
-        params.push(numericId);
+        params.push(id);
 
         const stmt = DB.prepare(
             `UPDATE device_types
@@ -113,14 +109,13 @@ export const DeviceTypeController = {
                 created_at
                 FROM device_types
                 WHERE id = ?`
-        ).get(numericId);
+        ).get(id);
 
         return res.json(updated);
     },
     // DELETE /device-types/:id
     delete(req: any, res: any) {
         const { id } = req.params;
-
         const stmt = DB.prepare("DELETE FROM device_types WHERE id = ?");
         const info = stmt.run(id);
 

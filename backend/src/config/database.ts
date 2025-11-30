@@ -13,7 +13,7 @@ DB.exec(`
     );
 
     CREATE TABLE IF NOT EXISTS device_types (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT PRIMARY KEY,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         firmware_version TEXT NOT NULL,
         firmware_build BLOB NOT NULL,
@@ -23,7 +23,7 @@ DB.exec(`
 
     CREATE TABLE IF NOT EXISTS devices (
         code TEXT PRIMARY KEY,
-        device_type_id INTEGER NOT NULL,
+        device_type_id TEXT NOT NULL,
         owner_id INTEGER,
         activated INTEGER DEFAULT 0,
         FOREIGN KEY(owner_id) REFERENCES users(id),

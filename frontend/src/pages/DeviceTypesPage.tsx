@@ -90,8 +90,26 @@ const DeviceTypesPage: React.FC = () => {
         setProperties([]);
         setError(null);
     };
+    const validateFirmwareVersion = (value: string): string | null => {
+        const trimmed = value.trim();
 
-    const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+        // should be only  X.Y.Z
+        const match = trimmed.match(/^(\d+)\.(\d+)\.(\d+)$/);
+        if (!match) {
+            return "Version should be in major minor patch format (ex 1.1.124) ";
+        }
+
+        const parts = match.slice(1).map(Number); // [major, minor, patch]
+
+        // ogni parte 0–255
+        if (parts.some((n) => n < 0 || n > 255)) {
+            return "every number cannot be major of 255";
+        }
+
+        return null; // tutto ok
+    };
+
+        const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0] || null;
         if (!file) {
             setFirmwareFile(null);
@@ -99,7 +117,7 @@ const DeviceTypesPage: React.FC = () => {
         }
 
         if (file.size > MAX_FILE_SIZE) {
-            setError("File troppo grande (max 10MB).");
+            setError("File too big (max 10MB).");
             e.target.value = "";
             setFirmwareFile(null);
             return;
@@ -114,19 +132,20 @@ const DeviceTypesPage: React.FC = () => {
         setError(null);
         setSuccessMessage(null);
 
+
         if (!firmwareVersion.trim() || !typeId.trim()) {
-            setError("Compila tutti i campi obbligatori.");
+            setError("Compile every field.");
             return;
         }
 
+        const fwError = validateFirmwareVersion(firmwareVersion);
+        if (fwError) {
+            setError(fwError);
+            return;
+        }
         // In create il file è obbligatorio
         if (formMode === "create" && !firmwareFile) {
-            setError("Seleziona un file firmware (max 10MB).");
-            return;
-        }
-
-        if (firmwareFile && firmwareFile.size > MAX_FILE_SIZE) {
-            setError("File troppo grande (max 10MB).");
+            setError("Select a .bin file (max 10MB).");
             return;
         }
 

@@ -1,6 +1,7 @@
 import { json } from "express";
 import { DB } from "../config/database";
 import crypto from "crypto";
+import { error } from "ajv/dist/vocabularies/applicator/dependencies";
 
 export const OtaController = {
 
@@ -9,10 +10,10 @@ export const OtaController = {
         const data = DB.prepare(
             "SELECT properties FROM device_properties WHERE device_code = ?"
         ).get(dev_code);
-        if(data){
+        if (data) {
             let props = JSON.parse((data as any).properties);
             res.json(props);
-        }else{
+        } else {
             res.status(400).json({ error: "Device not found" });
         }
     },
@@ -20,20 +21,38 @@ export const OtaController = {
     getBuildFromCode(req: any, res: any) {
         const { dev_code } = req.params
         const row = DB.prepare(
-            `SELECT firmware_build FROM devices d
+            `SELECT firmware_build fb, firmware_version fv FROM devices d
                 JOIN device_types dt ON d.device_type_id = dt.id
                 WHERE d.code = ?`
-            ).get(dev_code);
-        if(!row){
+        ).get(dev_code);
+        if (!row) {
             res.status(400).json({ error: "Device not found" });
         }
-        // filename tipo "firmware.bin"
-        const fileBuffer: Buffer = (row as any).firmware_build;
+        let device = "unknown";
+        let version = "unknown";
+        const esp8266Version = req.headers["x-esp8266-version"] as string | undefined;
+        const esp8266Mac = req.headers["x-esp8266-sta-mac"] as string | undefined;
 
+        const esp32Version = req.headers["x-esp32-version"] as string | undefined;
+        const esp32Mac = req.headers["x-esp32-sta-mac"] as string | undefined;
+
+        if (esp8266Version) {
+            device = `x-esp8266[${esp8266Mac || "no-mac"}]`;
+            version = esp8266Version;
+        }
+        if (esp32Version) {
+            device = `x-esp32[${esp32Mac || "no-mac"}]`;
+            version = esp32Version;
+        }
+        console.info(`client [${device}] - device [${dev_code}] - [${version} -> ${(row as any).fv}]`);
+
+        const fileBuffer: Buffer = (row as any).fb;
+        const md5Checksum = crypto.createHash("md5")
+            .update(fileBuffer)
+            .digest("hex");
+        res.setHeader("x-MD5", md5Checksum);
         res.setHeader("Content-Type", "application/octet-stream");
-        res.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${encodeURIComponent("firmware.bin")}"`
+        res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent("firmware.bin")}"`
         );
         return res.send(fileBuffer);
     },
@@ -45,47 +64,50 @@ export const OtaController = {
                 JOIN device_types dt ON d.device_type_id = dt.id
                 WHERE code = ?`
         ).get(dev_code);
-        if(data){
+        if (data) {
             const fileBuffer: Buffer = (data as any).fb;
             const md5Checksum = crypto.createHash("md5")
-                                .update(fileBuffer)
-                                .digest("hex");
-            res.json({version : (data as any).fv,
-                      md5Checksum : md5Checksum});
-        }else{
+                .update(fileBuffer)
+                .digest("hex");
+            res.setHeader("X-MD5", md5Checksum);
+            res.json({ version: (data as any).fv, md5Checksum: md5Checksum });
+        } else {
             res.status(400).json({ error: "Device not found" });
         }
     },
 
     UploadNewBuild(req: any, res: any) {
-        const { token, version } = req.body;
+        const { token, version } = req.body as any;
         const file = req.file; // tipo Express.Multer.File | undefined
 
         if (!token || !version || !file) {
             return res.status(400).json({ error: "token, version or file missing" });
         }
-        const stmt = DB.prepare(`
-            UPDATE device_types
-            SET
-                firmware_build = @firmware_build,
-                firmware_version = @firmware_version
-            WHERE id IN (
-                SELECT d.device_type_id
-                FROM devices d
-                WHERE d.code = @device_code
-            )
-        `);
-        try{
-            stmt.run({
-                firmware_build: file,
+        try {
+            const stmt = DB.prepare(`
+                UPDATE device_types
+                SET
+                    firmware_build   = @firmware_build,
+                    firmware_version = @firmware_version
+                WHERE id = (
+                    SELECT device_type_id
+                    FROM devices
+                    WHERE code = @device_id)
+            `);
+
+            const file = req.file as Express.Multer.File;
+            const result = stmt.run({
+                firmware_build: file.buffer,
                 firmware_version: version,
-                device_code: token,
+                device_id: token,   // qui "token" è il code del device
             });
-        } catch{
-                res.status(400).json({ error: "Error updating file" });
+
+            if (result.changes === 0) {
+                throw new Error(`No match for device code [${token}]`);
+            }
+        } catch (e) {
+            return res.status(400).json({ error: `Error updating file: ${e}` });
         }
-        return res.json({ ok: true });
+        return res.json({ ok: `updated with version [${version}]` });
     },
 };
-
-

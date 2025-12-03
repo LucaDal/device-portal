@@ -3,7 +3,6 @@ import { authMiddleware } from "../middleware/auth";
 import { DeviceTypeController } from "../controllers/deviceTypeController";
 
 import multer from "multer";
-
 const upload = multer();
 const router = Router();
 

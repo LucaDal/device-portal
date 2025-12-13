@@ -62,9 +62,10 @@ html, body {
 /* ===== Layout ===== */
 /* il layout interno deve scrollare SOLO dove serve */
 .layout {
-    height: calc(100% - 64px); /* altezza totale meno header */
+    min-height: calc(100vh - 64px);
     overflow: hidden;
     display: flex;
+    align-items: stretch;
 }
 
 /* ===== Sidebar ===== */
@@ -73,7 +74,11 @@ html, body {
     background-color: #111827;
     padding: 1rem;
     border-right: 1px solid #374151;
-    height: calc(100vh - 64px); /* full height minus header */
+    min-height: calc(100vh - 64px);
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 64px;
 }
 
 .sidebar ul {
@@ -99,6 +104,8 @@ html, body {
     flex: 1;
     overflow-y: auto;
     background-color: #1f2937;
+    display: flex;
+    justify-content: center;
 }
 
 /* ===== Buttons & Inputs ===== */

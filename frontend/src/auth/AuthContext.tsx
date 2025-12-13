@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { User } from "@shared/types/user";
-import { useNavigate } from "react-router-dom";
 
 interface AuthContextType {
   user: User | null;
@@ -57,8 +56,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     localStorage.removeItem("token");
     setUser(null);
     setToken(null);
-    const navigate =  useNavigate();
-    navigate("/");
+    window.location.href = "/login";
   };
 
   return (

@@ -116,6 +116,19 @@ export const DeviceTypeController = {
     // DELETE /device-types/:id
     delete(req: any, res: any) {
         const { id } = req.params;
+
+        // Block deletion if devices reference this device type to avoid FK errors
+        const linked = DB.prepare(
+            "SELECT COUNT(*) AS count FROM devices WHERE device_type_id = ?"
+        ).get(id) as { count: number };
+
+        if (linked && linked.count > 0) {
+            return res.status(400).json({
+                error: "Cannot delete: there are devices linked to this device type",
+                devices_using_type: linked.count,
+            });
+        }
+
         const stmt = DB.prepare("DELETE FROM device_types WHERE id = ?");
         const info = stmt.run(id);
 

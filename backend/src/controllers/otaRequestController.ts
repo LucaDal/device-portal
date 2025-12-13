@@ -1,7 +1,30 @@
-import { json } from "express";
 import { DB } from "../config/database";
 import crypto from "crypto";
-import { error } from "ajv/dist/vocabularies/applicator/dependencies";
+import { SavedProperties } from "@shared/types/properties";
+
+type OtaProperties = Record<string, string | number | boolean>;
+
+function parseSavedProperties(raw: unknown): SavedProperties {
+    if (!raw) return {};
+    try {
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            return parsed as SavedProperties;
+        }
+    } catch (e) {
+        console.error("Errore nel parse delle properties OTA", e);
+    }
+    return {};
+}
+
+function mapToOtaProperties(saved: SavedProperties): OtaProperties {
+    return Object.entries(saved).reduce<OtaProperties>((acc, [key, entry]) => {
+        if (entry && typeof entry === "object" && "value" in entry) {
+            acc[key] = entry.value as string | number | boolean;
+        }
+        return acc;
+    }, {});
+}
 
 export const OtaController = {
 
@@ -10,12 +33,13 @@ export const OtaController = {
         const data = DB.prepare(
             "SELECT properties FROM device_properties WHERE device_code = ?"
         ).get(dev_code);
-        if (data) {
-            let props = JSON.parse((data as any).properties);
-            res.json(props);
-        } else {
-            res.status(400).json({ error: "Device not found" });
+        if (!data) {
+            return res.status(400).json({ error: "Device not found" });
         }
+
+        const savedProps = parseSavedProperties((data as any).properties);
+        const otaProps = mapToOtaProperties(savedProps);
+        res.json(otaProps);
     },
 
     getBuildFromCode(req: any, res: any) {

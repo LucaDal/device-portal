@@ -1,4 +1,4 @@
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent, useMemo } from "react";
 import {
     getDeviceTypes,
     getDevices,
@@ -16,8 +16,102 @@ import {
     SavedProperties,
 } from "@shared/types/properties";
 
+const PROPERTY_CHAR_LIMIT = 400;
+
 // Estendo la riga base con il value usato nel form
 type DevicePropertyRow = PropertyRow & { value: string };
+
+// helper: parse JSON di type_properties (schema: { key: "int" | "string" | ... })
+const parseTypeProperties = (
+    raw: unknown
+): Record<string, PropertyType> => {
+    if (!raw) return {};
+    try {
+        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            // nel DB ci aspettiamo { chiave: "int" | "float" | ... }
+            return obj as Record<string, PropertyType>;
+        }
+    } catch (e) {
+        console.error("Impossibile parsare type_properties", e);
+    }
+    return {};
+};
+
+// helper: parse JSON di device_properties (valori salvati: SavedProperties)
+const parseDeviceProperties = (raw: unknown): SavedProperties => {
+    if (!raw) return {};
+    try {
+        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            return obj as SavedProperties;
+        }
+    } catch (e) {
+        console.error("Impossibile parsare device_properties", e);
+    }
+    return {};
+};
+
+const buildPropertyRows = (
+    device: DeviceWithRelations
+): DevicePropertyRow[] => {
+    const typeProps = parseTypeProperties(device.type_properties);
+    const devProps = parseDeviceProperties(device.device_properties);
+
+    return Object.entries(typeProps).map(([key, type]) => {
+        const savedProp = devProps[key];
+        return {
+            key,
+            type,
+            value: savedProp ? String(savedProp.value) : "",
+        };
+    });
+};
+
+const calculateTotalPropertyCharacters = (
+    rows: DevicePropertyRow[]
+): number =>
+    rows.reduce((total, { key, value }) => {
+        const trimmedKey = key.trim();
+        if (!trimmedKey) return total;
+        return total + trimmedKey.length + value.length;
+    }, 0);
+
+const castValueForType = (
+    row: DevicePropertyRow
+): { ok: true; value: string | number | boolean } | { ok: false; error: string } => {
+    const key = row.key.trim();
+
+    switch (row.type) {
+        case PropertyType.INT: {
+            const n = parseInt(row.value, 10);
+            if (Number.isNaN(n)) {
+                return { ok: false, error: `Valore non valido per "${key}" (int atteso).` };
+            }
+            return { ok: true, value: n };
+        }
+
+        case PropertyType.FLOAT: {
+            const n = parseFloat(row.value);
+            if (Number.isNaN(n)) {
+                return { ok: false, error: `Valore non valido per "${key}" (float atteso).` };
+            }
+            return { ok: true, value: n };
+        }
+
+        case PropertyType.BOOL: {
+            const lower = row.value.toLowerCase();
+            if (lower !== "true" && lower !== "false") {
+                return { ok: false, error: `Valore non valido per "${key}" (true/false atteso).` };
+            }
+            return { ok: true, value: lower === "true" };
+        }
+
+        case PropertyType.STRING:
+        default:
+            return { ok: true, value: row.value };
+    }
+};
 
 const DevicesPage: React.FC = () => {
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
@@ -33,40 +127,16 @@ const DevicesPage: React.FC = () => {
     const [activated, setActivated] = useState(false);
 
     // properties per device selezionato
-    const [selectedDevice, setSelectedDevice] =
-        useState<DeviceWithRelations | null>(null);
+    const [selectedDevice, setSelectedDevice] = useState<DeviceWithRelations | null>(null);
     const [propertyRows, setPropertyRows] = useState<DevicePropertyRow[]>([]);
     const [savingProps, setSavingProps] = useState(false);
     const { user } = useAuth();
 
-    // helper: parse JSON di type_properties (schema: { key: "int" | "string" | ... })
-    const parseTypeProperties = (raw: unknown): Record<string, PropertyType> => {
-        if (!raw) return {};
-        try {
-            const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-            if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-                // nel DB ci aspettiamo { chiave: "int" | "float" | ... }
-                return obj as Record<string, PropertyType>;
-            }
-        } catch (e) {
-            console.error("Impossibile parsare type_properties", e);
-        }
-        return {};
-    };
-
-    // helper: parse JSON di device_properties (valori salvati: SavedProperties)
-    const parseDeviceProperties = (raw: unknown): SavedProperties => {
-        if (!raw) return {};
-        try {
-            const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-            if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-                return obj as SavedProperties;
-            }
-        } catch (e) {
-            console.error("Impossibile parsare device_properties", e);
-        }
-        return {};
-    };
+    const totalPropertyCharacters = useMemo(
+        () => calculateTotalPropertyCharacters(propertyRows),
+        [propertyRows]
+    );
+    const isOverCharactersLimit = totalPropertyCharacters > PROPERTY_CHAR_LIMIT;
 
     const fetchAll = async () => {
         try {
@@ -129,21 +199,7 @@ const DevicesPage: React.FC = () => {
         setSuccessMessage(null);
         setError(null);
 
-        const typeProps = parseTypeProperties(device.type_properties);
-        const devProps = parseDeviceProperties(device.device_properties);
-
-        const rows: DevicePropertyRow[] = Object.entries(typeProps).map(
-            ([key, type]) => {
-                const savedProp = devProps[key];
-                return {
-                    key,
-                    type,
-                    value: savedProp ? String(savedProp.value) : "",
-                };
-            }
-        );
-
-        setPropertyRows(rows);
+        setPropertyRows(buildPropertyRows(device));
     };
 
     const handleDeleteDevice = async (device: DeviceWithRelations) => {
@@ -187,55 +243,27 @@ const DevicesPage: React.FC = () => {
         setSuccessMessage(null);
 
         const propsObj: SavedProperties = {};
+        const totalChars = calculateTotalPropertyCharacters(propertyRows);
+        if (totalChars > PROPERTY_CHAR_LIMIT) {
+            setError(
+                `Limite massimo di ${PROPERTY_CHAR_LIMIT} caratteri superato (totale attuale: ${totalChars}).`
+            );
+            return;
+        }
 
         for (const row of propertyRows) {
             const k = row.key.trim();
             if (!k) continue;
 
-            let castedValue: string | number | boolean = row.value;
-
-            switch (row.type) {
-                case PropertyType.INT: {
-                    const n = parseInt(row.value, 10);
-                    if (Number.isNaN(n)) {
-                        setError(`Valore non valido per "${k}" (int atteso).`);
-                        return;
-                    }
-                    castedValue = n;
-                    break;
-                }
-
-                case PropertyType.FLOAT: {
-                    const n = parseFloat(row.value);
-                    if (Number.isNaN(n)) {
-                        setError(`Valore non valido per "${k}" (float atteso).`);
-                        return;
-                    }
-                    castedValue = n;
-                    break;
-                }
-
-                case PropertyType.BOOL: {
-                    const lower = row.value.toLowerCase();
-                    if (lower !== "true" && lower !== "false") {
-                        setError(
-                            `Valore non valido per "${k}" (true/false atteso).`
-                        );
-                        return;
-                    }
-                    castedValue = lower === "true";
-                    break;
-                }
-
-                case PropertyType.STRING:
-                default:
-                    castedValue = row.value;
-                    break;
+            const castResult = castValueForType(row);
+            if (!castResult.ok) {
+                setError(castResult.error);
+                return;
             }
 
             propsObj[k] = {
                 type: row.type,
-                value: castedValue,
+                value: castResult.value,
             };
         }
 
@@ -450,10 +478,7 @@ const DevicesPage: React.FC = () => {
                                 ) : (
                                     <div className="dt-props-list">
                                         {propertyRows.map((row, index) => (
-                                            <div
-                                                key={row.key}
-                                                className="dt-prop-row"
-                                            >
+                                            <div key={row.key} className="dt-prop-row">
                                                 <div className="dt-prop-key">
                                                     <strong>{row.key}</strong>{" "}
                                                     <span className="dt-chip">
@@ -481,11 +506,25 @@ const DevicesPage: React.FC = () => {
                                     </div>
                                 )}
 
+                                <div
+                                    className={
+                                        isOverCharactersLimit
+                                            ? "dt-alert dt-alert-error"
+                                            : "dt-small"
+                                    }
+                                >
+                                    Totale caratteri (chiave + valore):{" "}
+                                    <strong>
+                                        {totalPropertyCharacters}/
+                                        {PROPERTY_CHAR_LIMIT}
+                                    </strong>
+                                </div>
+
                                 <button
                                     type="button"
                                     className="dt-btn dt-btn-primary"
                                     onClick={handleSaveProperties}
-                                    disabled={savingProps}
+                                    disabled={savingProps || isOverCharactersLimit}
                                 >
                                     {savingProps
                                         ? "Salvataggio..."

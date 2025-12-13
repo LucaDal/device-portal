@@ -1,0 +1,19 @@
+services:
+  api:
+    image: lucadal/device-portal:api
+    env_file:
+      - .env
+    environment:
+      ENABLE_REQUEST_LOGS: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      # persist SQLite DB outside the container; host path configurable via DB_PATH_HOST
+      - ${DB_PATH_HOST:-./backend/data.db}:${DB_PATH:-/app/backend/data.db}
+    restart: unless-stopped
+
+  ui:
+    image: lucadal/device-portal:ui
+    ports:
+      - "5173:5173"
+    restart: unless-stopped

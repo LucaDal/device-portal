@@ -1,4 +1,4 @@
-body {.container {
+.container {
   max-width: 900px;
   margin: 40px auto;
   padding: 0 20px;
@@ -84,4 +84,3 @@ body {.container {
   font-size: 18px;
   margin-top: 40px;
 }
-

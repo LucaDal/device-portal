@@ -1,0 +1,335 @@
+/* Shared UI primitives for "dt-" components */
+.dt-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.dt-header h1 {
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: #f3f4f6;
+}
+
+.dt-header p {
+    font-size: 0.95rem;
+    color: #d1d5db;
+}
+
+.dt-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.7fr);
+    gap: 1.5rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+@media (max-width: 960px) {
+    .dt-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.dt-card {
+    background-color: #111827;
+    color: #f3f4f6;
+    border-radius: 0.75rem;
+    padding: 1.25rem 1.5rem;
+    border: 1px solid #374151;
+    box-shadow: 0 20px 25px -20px rgba(0, 0, 0, 0.6);
+}
+
+.dt-table-card {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+}
+
+.dt-form-card {
+    align-self: flex-start;
+}
+
+.dt-form-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.dt-form-header h2 {
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: #f3f4f6;
+}
+
+.dt-form-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.dt-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.dt-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.dt-form-group label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #f3f4f6;
+}
+
+.dt-form-group input,
+.dt-form-group select {
+    background-color: #1f2937;
+    border-radius: 0.5rem;
+    border: 1px solid #4b5563;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.9rem;
+    color: #f3f4f6;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.dt-form-group input::placeholder {
+    color: #9ca3af;
+}
+
+.dt-form-group input:focus,
+.dt-form-group select:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.45);
+}
+
+.dt-inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.dt-inline label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.dt-help-text,
+.dt-small {
+    font-size: 0.8rem;
+    color: #d1d5db;
+}
+
+.dt-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    padding: 0.4rem 0.85rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    background-color: #111827;
+    color: #f3f4f6;
+    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+}
+
+.dt-btn:hover {
+    background-color: #0f172a;
+    transform: translateY(-0.5px);
+}
+
+.dt-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+    transform: none;
+}
+
+.dt-btn-primary {
+    background-color: #3b82f6;
+    border-color: #3b82f6;
+    color: #f3f4f6;
+}
+
+.dt-btn-primary:hover {
+    background-color: #2563eb;
+    border-color: #2563eb;
+}
+
+.dt-btn-outline {
+    background-color: transparent;
+    border-color: #4b5563;
+    color: #f3f4f6;
+}
+
+.dt-btn-outline:hover {
+    background-color: #1f2937;
+}
+
+.dt-btn-ghost {
+    background-color: transparent;
+    border-color: transparent;
+    color: #d1d5db;
+}
+
+.dt-btn-ghost:hover {
+    background-color: #111827;
+}
+
+.dt-btn-xs {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+.dt-btn-danger {
+    background-color: #b91c1c;
+    border-color: #b91c1c;
+    color: #f3f4f6;
+}
+
+.dt-btn-danger:hover {
+    background-color: #991b1b;
+    border-color: #991b1b;
+}
+
+.dt-alert {
+    border-radius: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+}
+
+.dt-alert-error {
+    background-color: rgba(220, 38, 38, 0.08);
+    border: 1px solid rgba(220, 38, 38, 0.6);
+    color: #fecaca;
+}
+
+.dt-alert-success {
+    background-color: rgba(22, 163, 74, 0.08);
+    border: 1px solid rgba(22, 163, 74, 0.6);
+    color: #bbf7d0;
+}
+
+.dt-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    background-color: #1f2937;
+    color: #d1d5db;
+}
+
+.dt-table-wrapper {
+    position: relative;
+    margin-top: 0.5rem;
+    border-radius: 0.75rem;
+    border: 1px solid #374151;
+    overflow: hidden;
+    background-color: #111827;
+}
+
+.dt-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.dt-table thead {
+    background-color: #111827;
+}
+
+.dt-table th,
+.dt-table td {
+    padding: 0.55rem 0.75rem;
+    text-align: left;
+}
+
+.dt-table th {
+    font-weight: 500;
+    color: #d1d5db;
+    border-bottom: 1px solid #374151;
+    font-size: 0.8rem;
+}
+
+.dt-table tbody tr:nth-child(even) {
+    background-color: #111827;
+}
+
+.dt-table tbody tr:nth-child(odd) {
+    background-color: #1f2937;
+}
+
+.dt-table tbody tr:hover {
+    background-color: #0f172a;
+}
+
+.dt-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+.dt-loading {
+    padding: 1rem;
+    font-size: 0.9rem;
+    color: #d1d5db;
+}
+
+.dt-empty {
+    padding: 0.75rem 0.2rem;
+    font-size: 0.85rem;
+    color: #9ca3af;
+}
+
+.dt-divider {
+    height: 1px;
+    width: 100%;
+    margin: 1rem 0;
+    background: linear-gradient(to right, transparent, #4b5563, transparent);
+    border: none;
+}
+
+.dt-table-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.dt-properties-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.dt-props-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.dt-prop-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    background-color: #0f172a;
+    padding: 0.7rem 0.8rem;
+    border-radius: 0.75rem;
+    border: 1px solid #1f2937;
+}
+
+.dt-prop-key {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.95rem;
+}

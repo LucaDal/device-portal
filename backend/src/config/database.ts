@@ -1,7 +1,31 @@
+import fs from "fs";
+import path from "path";
 import Database from "better-sqlite3";
-import { ensureAdminUser} from "./bootstrap";
+import { ensureAdminUser } from "./bootstrap";
 
-export const DB = new Database("./data.db");
+// Prefer user-provided DB path; fall back to a writable path inside the app directory
+const FALLBACK_DB_PATH = path.resolve(process.cwd(), "data.db");
+const envDbPath = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : undefined;
+
+function preparePath(targetPath: string): string {
+    const dir = path.dirname(targetPath);
+    fs.mkdirSync(dir, { recursive: true });
+    return targetPath;
+}
+
+let dbPath = FALLBACK_DB_PATH;
+if (envDbPath) {
+    try {
+        dbPath = preparePath(envDbPath);
+    } catch (error) {
+        console.warn(`DB_PATH "${envDbPath}" is not usable, falling back to "${FALLBACK_DB_PATH}".`, error);
+        dbPath = preparePath(FALLBACK_DB_PATH);
+    }
+} else {
+    dbPath = preparePath(FALLBACK_DB_PATH);
+}
+
+export const DB = new Database(dbPath);
 
 DB.exec(`
     CREATE TABLE IF NOT EXISTS users (

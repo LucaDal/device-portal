@@ -8,6 +8,7 @@ const router = Router();
 router.get("/:dev_code/properties", OtaController.getProperties);
 router.get("/:dev_code/build", OtaController.getBuildFromCode);
 router.get("/:dev_code/version", OtaController.getBuildInfoFromCode);
+router.get("/type/:device_type_id/version", OtaController.getBuildInfoFromDeviceTypeId);
 router.post("/upload", upload.single("file"), OtaController.UploadNewBuild);
 
 export default router;

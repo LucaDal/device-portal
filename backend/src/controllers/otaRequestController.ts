@@ -26,6 +26,19 @@ function mapToOtaProperties(saved: SavedProperties): OtaProperties {
     }, {});
 }
 
+function respondToBuildReq(data: any, res: any) {
+    if (data) {
+        const fileBuffer: Buffer = (data as any).fb;
+        const md5Checksum = crypto.createHash("md5")
+            .update(fileBuffer)
+            .digest("hex");
+        res.setHeader("X-MD5", md5Checksum);
+        res.json({ version: (data as any).fv, md5Checksum: md5Checksum });
+    } else {
+        res.status(400).json({ error: "Device not found" });
+    }
+}
+
 export const OtaController = {
 
     getProperties(req: any, res: any) {
@@ -50,7 +63,7 @@ export const OtaController = {
                 WHERE d.code = ?`
         ).get(dev_code);
         if (!row) {
-            res.status(400).json({ error: "Device not found" });
+            return res.status(400).json({ error: "Device not found" });
         }
         let device = "unknown";
         let version = "unknown";
@@ -74,13 +87,21 @@ export const OtaController = {
         const md5Checksum = crypto.createHash("md5")
             .update(fileBuffer)
             .digest("hex");
-        res.setHeader("x-MD5", md5Checksum);
+        res.setHeader("X-MD5", md5Checksum);
         res.setHeader("Content-Type", "application/octet-stream");
         res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent("firmware.bin")}"`
         );
         return res.send(fileBuffer);
     },
-
+    getBuildInfoFromDeviceTypeId(req: any, res: any){
+        const { device_type_id } = req.params
+        const data = DB.prepare(
+            `SELECT firmware_version fv, firmware_build fb
+             FROM device_types
+             WHERE id = ?`
+        ).get(device_type_id);
+        respondToBuildReq(data, res);
+    },
     getBuildInfoFromCode(req: any, res: any) {
         const { dev_code } = req.params
         const data = DB.prepare(
@@ -88,16 +109,7 @@ export const OtaController = {
                 JOIN device_types dt ON d.device_type_id = dt.id
                 WHERE code = ?`
         ).get(dev_code);
-        if (data) {
-            const fileBuffer: Buffer = (data as any).fb;
-            const md5Checksum = crypto.createHash("md5")
-                .update(fileBuffer)
-                .digest("hex");
-            res.setHeader("X-MD5", md5Checksum);
-            res.json({ version: (data as any).fv, md5Checksum: md5Checksum });
-        } else {
-            res.status(400).json({ error: "Device not found" });
-        }
+        respondToBuildReq(data, res);
     },
 
     UploadNewBuild(req: any, res: any) {
@@ -113,10 +125,7 @@ export const OtaController = {
                 SET
                     firmware_build   = @firmware_build,
                     firmware_version = @firmware_version
-                WHERE id = (
-                    SELECT device_type_id
-                    FROM devices
-                    WHERE code = @device_id)
+                WHERE id =  @device_id
             `);
 
             const file = req.file as Express.Multer.File;

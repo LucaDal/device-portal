@@ -1,10 +1,11 @@
 import React from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { Role } from "@shared/constants/auth";
 
 interface Props {
   children: React.ReactNode;
-  allowedRoles?: ("admin" | "dev" | "user")[];
+  allowedRoles?: Role[];
 }
 
 const ProtectedRoute = ({ children, allowedRoles }: Props) => {

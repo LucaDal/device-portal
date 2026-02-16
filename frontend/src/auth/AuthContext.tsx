@@ -33,7 +33,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           setToken(storedToken);
         }
       } catch (e) {
-        console.error("Errore nel parse di user dal localStorage:", e);
+        console.error("Error parsing user from localStorage:", e);
         // in caso di errore pulisco per sicurezza
         localStorage.removeItem("user");
       }
@@ -45,7 +45,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             localStorage.setItem("user", JSON.stringify(u));
             localStorage.setItem("token", t);
         }catch(e){
-            console.error("Errore nel setting logalStorage:", e);
+            console.error("Error while setting localStorage:", e);
         }
         setUser(u);
         setToken(t);

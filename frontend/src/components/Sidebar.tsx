@@ -1,24 +1,41 @@
 import React from "react";
-import { Link } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { ROLES } from "@shared/constants/auth";
 
 const Sidebar = () => {
     const { user } = useAuth();
 
     if (!user) return null;
 
+    const items = [
+        { to: "/", label: "Home", enabled: true },
+        { to: "/devices", label: "Devices", enabled: true },
+        { to: "/add-device", label: "Add Device", enabled: true },
+        { to: "/settings", label: "Settings", enabled: true },
+        { to: "/users", label: "Users", enabled: user.role === ROLES.ADMIN },
+        { to: "/device-types", label: "Device Types", enabled: [ROLES.ADMIN, ROLES.DEV].includes(user.role) },
+    ];
+
     return (
         <aside className="sidebar">
-            <ul>
-                <li><Link to="/">Home</Link></li>
-                <li><Link to="/devices">Devices</Link></li>
-                <li><Link to="/add-device">Add Device</Link></li>
-                {user.role === "admin" &&
-                    <li><Link to="/users">Users</Link></li>
-                }
-                {["admin", "dev"].includes(user.role) &&
-                    <li><Link to="/device-types">Device Types</Link></li>
-                }
+            <div className="sidebar-heading">Navigation</div>
+            <ul className="sidebar-menu">
+                {items
+                    .filter((item) => item.enabled)
+                    .map((item) => (
+                        <li key={item.to}>
+                            <NavLink
+                                to={item.to}
+                                className={({ isActive }) =>
+                                    isActive ? "sidebar-link is-active" : "sidebar-link"
+                                }
+                                end={item.to === "/"}
+                            >
+                                <span>{item.label}</span>
+                            </NavLink>
+                        </li>
+                    ))}
             </ul>
         </aside>
     );

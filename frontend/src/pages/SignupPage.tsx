@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { signup as apiSignup, login as apiLogin} from "../auth/authService";
 import "../style/auth.css"
+import { ROLES, Role } from "@shared/constants/auth";
 
 export default function SignupPage() {
     const { login } = useAuth();
@@ -10,7 +11,7 @@ export default function SignupPage() {
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
     const [error, setError] = useState("");
-    const [role, setUser] = useState("user");
+    const [role, setUser] = useState<Role>(ROLES.USER);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Validazioni in tempo reale
@@ -32,7 +33,7 @@ export default function SignupPage() {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!formValid) {
-            setError("Controlla i campi prima di procedere.");
+            setError("Check the fields before continuing.");
             return;
         }
         setIsSubmitting(true);
@@ -42,7 +43,7 @@ export default function SignupPage() {
             await apiSignup({ email, password, role});
             window.location.href = "/";
         } catch (err: any) {
-            setError(err?.error || "Registrazione non riuscita");
+            setError(err?.error || "Sign upon failed");
             setIsSubmitting(false);
         }
     };
@@ -50,7 +51,7 @@ export default function SignupPage() {
     return (
         <div className="auth-container">
             <div className="auth-card" role="region" aria-labelledby="signup-title">
-                <h2 id="signup-title" className="auth-title">Registrati</h2>
+                <h2 id="signup-title" className="auth-title">Sign up</h2>
 
                 {error && (
                     <div className="auth-error" role="alert" aria-live="assertive">{error}</div>
@@ -62,7 +63,7 @@ export default function SignupPage() {
                         <input
                             id="email"
                             type="email"
-                            placeholder="Inserisci email"
+                            placeholder="Enter email"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             required
@@ -70,7 +71,7 @@ export default function SignupPage() {
                             aria-describedby="email-note"
                         />
                         <div id="email-note" className="helper-text" aria-live="polite">
-                            {email.length === 0 ? "" : emailValid ? "Email valida" : "Email non valida"}
+                            {email.length === 0 ? "" : emailValid ? "Valid email" : "Invalid email"}
                         </div>
                     </div>
 
@@ -79,7 +80,7 @@ export default function SignupPage() {
                         <input
                             id="password"
                             type="password"
-                            placeholder="Inserisci password"
+                            placeholder="Enter password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             required
@@ -88,18 +89,18 @@ export default function SignupPage() {
                         />
                         <div id="password-requirements" className="helper-text" aria-live="polite">
                             {password.length === 0 ? "" : (
-                                passwordValid ? "Password soddisfa i requisiti" :
-                                    "Min 8 caratteri, una maiuscola, un numero e un carattere speciale"
+                                passwordValid ? "Password meets requirements" :
+                                    "Min 8 chars, one uppercase, one number, and one special char"
                             )}
                         </div>
                     </div>
 
                     <div className={`auth-field ${confirmPassword ? (passwordsMatch ? "valid" : "invalid") : ""}`}>
-                        <label htmlFor="confirmPassword">Conferma Password</label>
+                        <label htmlFor="confirmPassword">Confirm Password</label>
                         <input
                             id="confirmPassword"
                             type="password"
-                            placeholder="Ripeti password"
+                            placeholder="Repeat password"
                             value={confirmPassword}
                             onChange={(e) => setConfirmPassword(e.target.value)}
                             required
@@ -107,7 +108,7 @@ export default function SignupPage() {
                             aria-describedby="confirm-note"
                         />
                         <div id="confirm-note" className="helper-text" aria-live="polite">
-                            {confirmPassword.length === 0 ? "" : (passwordsMatch ? "Le password coincidono" : "Le password non coincidono")}
+                            {confirmPassword.length === 0 ? "" : (passwordsMatch ? "Passwords match" : "Passwords do not match")}
                         </div>
                     </div>
 
@@ -117,12 +118,12 @@ export default function SignupPage() {
                         disabled={!formValid}
                         aria-disabled={!formValid}
                     >
-                        {isSubmitting ? <span className="spinner" aria-hidden="true"></span> : "Crea account"}
+                        {isSubmitting ? <span className="spinner" aria-hidden="true"></span> : "Create account"}
                     </button>
                 </form>
 
                 <p className="auth-switch">
-                    Hai già un account? <a href="/login">Accedi</a>
+                    Already have an account? <a href="/login">Sign in</a>
                 </p>
             </div>
         </div>

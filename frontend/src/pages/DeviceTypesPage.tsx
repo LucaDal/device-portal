@@ -1,4 +1,4 @@
-import { useEffect, useState, FormEvent, ChangeEvent } from "react";
+import { useEffect, useRef, useState, FormEvent, ChangeEvent } from "react";
 import { DeviceType } from "@shared/types/device_type";
 import { PropertyRow, PropertyType } from "@shared/types/properties";
 import { getDeviceTypes, updateDeviceType } from "../devices/deviceService";
@@ -26,6 +26,7 @@ const DeviceTypesPage: React.FC = () => {
 
     const [submitting, setSubmitting] = useState(false);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const firmwareInputRef = useRef<HTMLInputElement | null>(null);
 
     // properties nel DB: { key: "string" | "int" | ... }
     const parseProperties = (raw: unknown): PropertyRow[] => {
@@ -56,7 +57,7 @@ const DeviceTypesPage: React.FC = () => {
                 });
             }
         } catch (e) {
-            console.error("Impossibile parsare properties", e);
+            console.error("Could not parse properties", e);
         }
         return [];
     };
@@ -69,7 +70,7 @@ const DeviceTypesPage: React.FC = () => {
             const data = await getDeviceTypes();
             setDeviceTypes(data);
         } catch (err: any) {
-            setError(err.error || "Errore imprevisto");
+            setError(err.error || "Unexpected error");
         } finally {
             setLoading(false);
         }
@@ -109,7 +110,7 @@ const DeviceTypesPage: React.FC = () => {
         return null; // tutto ok
     };
 
-        const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0] || null;
         if (!file) {
             setFirmwareFile(null);
@@ -125,6 +126,10 @@ const DeviceTypesPage: React.FC = () => {
 
         setError(null);
         setFirmwareFile(file);
+    };
+
+    const handleChooseFirmwareFile = () => {
+        firmwareInputRef.current?.click();
     };
 
     const handleSubmit = async (e: FormEvent) => {
@@ -143,7 +148,7 @@ const DeviceTypesPage: React.FC = () => {
             setError(fwError);
             return;
         }
-        // In create il file è obbligatorio
+        // In create il file è required
         if (formMode === "create" && !firmwareFile) {
             setError("Select a .bin file (max 10MB).");
             return;
@@ -164,14 +169,14 @@ const DeviceTypesPage: React.FC = () => {
             } else if (formMode === "edit" && selectedDevice) {
                 await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
             } else {
-                setError("Stato del form non valido.");
+                setError("Invalid form state.");
                 return;
             }
             setSuccessMessage("Operazione eseguita con successo.");
             resetForm();
             await fetchDeviceTypes();
         } catch (err: any) {
-            setError(err.error || "Errore imprevisto durante il salvataggio.");
+            setError(err.error || "Unexpected error while saving.");
         } finally {
             setSubmitting(false);
         }
@@ -190,7 +195,7 @@ const DeviceTypesPage: React.FC = () => {
     };
 
     const handleDelete = async (device: DeviceType) => {
-        if (!window.confirm(`Eliminare il device type "${device.id}"?`)) {
+        if (!window.confirm(`Delete device type "${device.id}"?`)) {
             return;
         }
 
@@ -199,13 +204,13 @@ const DeviceTypesPage: React.FC = () => {
             setSuccessMessage(null);
 
             await updateDeviceType(`/${device.id}`, "DELETE");
-            setSuccessMessage("Device type eliminato.");
+            setSuccessMessage("Device type deleted.");
             await fetchDeviceTypes();
             if (selectedDevice?.id === device.id) {
                 resetForm();
             }
         } catch (err: any) {
-            setError(err.error || "Errore imprevisto durante l'eliminazione.");
+            setError(err.error || "Unexpected error while deleting.");
         }
     };
 
@@ -256,7 +261,7 @@ const DeviceTypesPage: React.FC = () => {
         setSuccessMessage(null);
 
         if (!selectedDevice) {
-            setError("Nessun device selezionato.");
+            setError("No device selected.");
             return;
         }
 
@@ -281,12 +286,12 @@ const DeviceTypesPage: React.FC = () => {
 
             await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
 
-            setSuccessMessage("Proprietà aggiornate con successo.");
+            setSuccessMessage("Properties updated successfully.");
             await fetchDeviceTypes();
         } catch (err: any) {
             setError(
                 err.error ||
-                "Errore imprevisto durante il salvataggio delle proprietà."
+                "Unexpected error while saving properties."
             );
         } finally {
             setSubmitting(false);
@@ -297,7 +302,7 @@ const DeviceTypesPage: React.FC = () => {
         <div className="device-types-page">
             <header className="dt-header">
                 <h1>Device Types</h1>
-                <p>Gestisci versioni firmware e caricamento file (max 10MB).</p>
+                <p>Manage firmware versions and file uploads (max 10MB).</p>
             </header>
 
             <div className="dt-layout">
@@ -306,10 +311,10 @@ const DeviceTypesPage: React.FC = () => {
                     <div className="dt-form-header">
                         <h2>
                             {propertiesMode
-                                ? `Proprietà device type #${selectedDevice?.id}`
+                                ? `Device type properties #${selectedDevice?.id}`
                                 : formMode === "create"
-                                    ? "Crea nuovo device type"
-                                    : `Modifica device type #${selectedDevice?.id}`}
+                                    ? "Create new device type"
+                                    : `Edit device type #${selectedDevice?.id}`}
                         </h2>
 
                         <div className="dt-form-header-actions">
@@ -319,7 +324,7 @@ const DeviceTypesPage: React.FC = () => {
                                     type="button"
                                     onClick={() => setPropertiesMode(false)}
                                 >
-                                    ← Torna ai dati firmware
+                                    ← Back to firmware data
                                 </button>
                             )}
 
@@ -329,7 +334,7 @@ const DeviceTypesPage: React.FC = () => {
                                     type="button"
                                     onClick={resetForm}
                                 >
-                                    + Nuovo
+                                    + New
                                 </button>
                             )}
                         </div>
@@ -350,11 +355,11 @@ const DeviceTypesPage: React.FC = () => {
                             )}
 
                             <div className="dt-form-group">
-                                <label>Proprietà</label>
+                                <label>Properties</label>
 
                                 {properties.length === 0 && (
                                     <p className="dt-empty">
-                                        Nessuna proprietà. Aggiungine una.
+                                        No properties. Add one.
                                     </p>
                                 )}
 
@@ -401,7 +406,7 @@ const DeviceTypesPage: React.FC = () => {
                                     className="dt-btn dt-btn-outline"
                                     onClick={handleAddProperty}
                                 >
-                                    + Aggiungi proprietà
+                                    + Add property
                                 </button>
                             </div>
 
@@ -415,7 +420,7 @@ const DeviceTypesPage: React.FC = () => {
                                 className="dt-btn dt-btn-primary"
                                 disabled={submitting}
                             >
-                                {submitting ? "Salvataggio..." : "Salva proprietà"}
+                                {submitting ? "Saving..." : "Save properties"}
                             </button>
                         </form>
                     ) : (
@@ -428,17 +433,17 @@ const DeviceTypesPage: React.FC = () => {
                                     type="text"
                                     value={typeId}
                                     onChange={(e) => setTypeId(e.target.value)}
-                                    placeholder="Es. tipo_1, gateway, ..."
+                                    placeholder="E.g. tipo_1, gateway, ..."
                                 />
                             </div>
                             <div className="dt-form-group">
-                                <label htmlFor="description">Descrizione</label>
+                                <label htmlFor="description">Description</label>
                                 <input
                                     id="description"
                                     type="text"
                                     value={description}
                                     onChange={(e) => setDescription(e.target.value)}
-                                    placeholder="Es. Controller ambiente, Gateway, ..."
+                                    placeholder="E.g. Controller ambiente, Gateway, ..."
                                 />
                             </div>
 
@@ -449,7 +454,7 @@ const DeviceTypesPage: React.FC = () => {
                                     type="text"
                                     value={firmwareVersion}
                                     onChange={(e) => setFirmwareVersion(e.target.value)}
-                                    placeholder="Es. 1.0.0, 2.1.3, ..."
+                                    placeholder="E.g. 1.0.0, 2.1.3, ..."
                                 />
                             </div>
 
@@ -457,7 +462,7 @@ const DeviceTypesPage: React.FC = () => {
                                 <label htmlFor="firmwareFile">
                                     Firmware file{" "}
                                     {formMode === "create" && (
-                                        <span className="dt-chip">obbligatorio</span>
+                                        <span className="dt-chip">required</span>
                                     )}
                                 </label>
 
@@ -465,13 +470,25 @@ const DeviceTypesPage: React.FC = () => {
                                     <input
                                         id="firmwareFile"
                                         type="file"
+                                        ref={firmwareInputRef}
                                         onChange={handleFileChange}
                                         accept=".bin,*/*"
+                                        className="dt-file-input-native"
                                     />
+                                    <button
+                                        type="button"
+                                        className="dt-btn dt-btn-outline"
+                                        onClick={handleChooseFirmwareFile}
+                                    >
+                                        Choose file
+                                    </button>
+                                    <span className="dt-file-input-name">
+                                        {firmwareFile ? firmwareFile.name : "No file selected"}
+                                    </span>
                                 </div>
 
                                 <small className="dt-help-text">
-                                    Massimo 10MB.
+                                    Max 10MB.
                                 </small>
                             </div>
 
@@ -487,7 +504,7 @@ const DeviceTypesPage: React.FC = () => {
                                 className="dt-btn dt-btn-primary"
                                 disabled={submitting}
                             >
-                                {submitting ? "Salvataggio..." : "Salva"}
+                                {submitting ? "Saving..." : "Save"}
                             </button>
                         </form>
                     )}
@@ -496,16 +513,16 @@ const DeviceTypesPage: React.FC = () => {
                 {/* TABLE CARD */}
                 <section className="dt-card dt-table-card">
                     <div className="dt-table-header">
-                        <h2>Lista device types</h2>
+                        <h2>Device types list</h2>
                         <button className="dt-btn dt-btn-outline" onClick={fetchDeviceTypes}>
-                            Aggiorna
+                            Refresh
                         </button>
                     </div>
 
                     {loading ? (
-                        <div className="dt-loading">Caricamento...</div>
+                        <div className="dt-loading">Loading...</div>
                     ) : deviceTypes.length === 0 ? (
-                        <p className="dt-empty">Nessun device type presente.</p>
+                        <p className="dt-empty">No device types found.</p>
                     ) : (
                         <div className="dt-table-wrapper">
                             <table className="dt-table">
@@ -515,7 +532,7 @@ const DeviceTypesPage: React.FC = () => {
                                         <th>Description</th>
                                         <th>Firmware</th>
                                         <th>Created</th>
-                                        <th>Azione</th>
+                                        <th>Action</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -528,13 +545,13 @@ const DeviceTypesPage: React.FC = () => {
                                             <td>
                                                 <div className="dt-actions">
                                                     <button
-                                                        className="dt-btn dt-btn-xs"
+                                                        className="dt-btn dt-btn-xs dt-btn-primary"
                                                         onClick={() => handleEdit(dt)}
                                                     >
-                                                        Modifica
+                                                        Edit
                                                     </button>
                                                     <button
-                                                        className="dt-btn dt-btn-xs"
+                                                        className="dt-btn dt-btn-xs dt-btn-outline"
                                                         onClick={() => handleProperties(dt)}
                                                     >
                                                         Properties
@@ -543,7 +560,7 @@ const DeviceTypesPage: React.FC = () => {
                                                         className="dt-btn dt-btn-xs dt-btn-danger"
                                                         onClick={() => handleDelete(dt)}
                                                     >
-                                                        Elimina
+                                                        Delete
                                                     </button>
                                                 </div>
                                             </td>
@@ -560,4 +577,3 @@ const DeviceTypesPage: React.FC = () => {
 };
 
 export default DeviceTypesPage;
-

@@ -11,12 +11,6 @@ const Header = () => {
                 {user ? (
                     <>
                         <span>{user.email} ({user.role})</span>
-                        {user.role === "admin" &&
-                            <Link to="/admin">Admin</Link>
-                        }
-                        {["admin", "dev"].includes(user.role) &&
-                            <Link to="/dev-tools">Dev</Link>
-                        }
                         <button onClick={logout}>Logout</button>
                     </>
                 ) : (

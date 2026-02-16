@@ -1,6 +1,6 @@
 import { User } from "@shared/types/user";
-import { apiFetch } from "../api/apiClient";
-import { useAuth} from "./AuthContext";
+import { apiFetch, apiFetchWithAuth } from "../api/apiClient";
+import { Role } from "@shared/constants/auth";
 
 interface LoginPayload {
     email: string;
@@ -10,7 +10,7 @@ interface LoginPayload {
 interface RegisterUser {
     email: string;
     password: string;
-    role: string;
+    role: Role;
 };
 
 interface LoginResponse {
@@ -19,6 +19,11 @@ interface LoginResponse {
 }
 interface RegisterResponse {
     id : number;
+}
+
+interface ChangePasswordPayload {
+    currentPassword: string;
+    newPassword: string;
 }
 
 
@@ -36,6 +41,9 @@ export async function signup(payload: RegisterUser):Promise<RegisterResponse> {
     });
 }
 
-
-
-
+export async function changePassword(payload: ChangePasswordPayload): Promise<{ ok: boolean }> {
+    return apiFetchWithAuth<{ ok: boolean }>("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}

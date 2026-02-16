@@ -6,7 +6,7 @@ export const SchemaPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getSchema().then(setSchema).catch(err => setError(err.error || "Errore"));
+    getSchema().then(setSchema).catch(err => setError(err.error || "Error"));
   }, []);
 
   const handleSave = async () => {
@@ -14,7 +14,7 @@ export const SchemaPage: React.FC = () => {
       await updateSchema(schema);
       alert("Schema salvato");
     } catch (err: any) {
-      setError(err.error || "Errore salvataggio");
+      setError(err.error || "Save error");
     }
   };
 
@@ -28,8 +28,7 @@ export const SchemaPage: React.FC = () => {
         value={JSON.stringify(schema, null, 2)}
         onChange={e => setSchema(JSON.parse(e.target.value))}
       />
-      <button onClick={handleSave}>Salva</button>
+      <button onClick={handleSave}>Save</button>
     </div>
   );
 };
-

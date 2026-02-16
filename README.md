@@ -89,3 +89,74 @@ The `nginx.conf` file fronts API and UI.
 - DB not found: ensure `DB_PATH_HOST` exists on the host and matches the volume target.
 - Bind mount fails with "not a directory": the host path in `DB_PATH_HOST` must be a file, not a directory. If you point to a new path, create it first (e.g., `mkdir -p /home/pi/device-portal && touch /home/pi/device-portal/data.db`) before `docker compose up`.
 - Frontend can’t reach backend: verify `VITE_BACKEND_URL` (build-time) and `CORS_ORIGIN` (API runtime) point to the correct host/ports, and that ports 3000/5173 are exposed.
+
+## EMQX 5 HTTP Auth/ACL integration
+Backend now exposes:
+- `POST /mqtt/auth`
+- `POST /mqtt/acl`
+
+Add this runtime secret in backend `.env`:
+```bash
+MQTT_HTTP_AUTH_SECRET=replace-with-a-long-random-secret
+```
+
+### EMQX 5 example (`base.hocon`)
+Use HTTPS/mTLS listener and require client certificate:
+```hocon
+listeners.ssl.default {
+  bind = "0.0.0.0:8883"
+  ssl_options {
+    cacertfile = "etc/certs/ca.crt"
+    certfile = "etc/certs/server.crt"
+    keyfile = "etc/certs/server.key"
+    verify = verify_peer
+    fail_if_no_peer_cert = true
+  }
+}
+
+authentication = [
+  {
+    mechanism = password_based
+    backend = http
+    method = post
+    url = "http://127.0.0.1:3000/mqtt/auth"
+    headers = {
+      "content-type" = "application/json"
+      "x-emqx-auth-secret" = "replace-with-the-same-secret"
+    }
+    body = {
+      clientid = "${clientid}"
+      cert_pem = "${peercert}"
+    }
+  }
+]
+
+authorization {
+  no_match = deny
+  deny_action = ignore
+  sources = [
+    {
+      type = http
+      enable = true
+      method = post
+      url = "http://127.0.0.1:3000/mqtt/acl"
+      headers = {
+        "content-type" = "application/json"
+        "x-emqx-auth-secret" = "replace-with-the-same-secret"
+      }
+      body = {
+        clientid = "${clientid}"
+        topic = "${topic}"
+        action = "${action}"
+      }
+    }
+  ]
+}
+```
+
+Notes:
+- Protect hooks with `MQTT_HTTP_AUTH_SECRET` and send the same value from EMQX in `x-emqx-auth-secret`.
+- Device authentication is certificate-only in backend hooks: username/password are ignored.
+- Register device certificates in `device_certificates` via admin API (`/mqtt/admin/certificates`) before connecting devices.
+- `cert_pem` is expected from EMQX as `${peercert}` (URL-encoded in some setups; backend decodes it before fingerprint validation).
+- Dynamic ACL rules are stored in `mqtt_acl_rules` and can be managed by admin users only via `/mqtt/admin/*`.

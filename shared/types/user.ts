@@ -1,12 +1,13 @@
+import { Role } from "../constants/auth";
+
 export interface User {
 	id: number;
 	email: string;
-	password_hash: string;
-	role: UserRole;
+	role: Role;
+	must_change_password?: number;
+	created_at?: string;
 }
 
-export enum UserRole {
-	ADMIN = "admin",
-	USER = "user",
-	DEV = "dev",
+export interface UserWithPassword extends User {
+	password_hash: string;
 }

@@ -9,10 +9,10 @@ const HomePage = () => {
     <div className="home-container">
       <div className="home-card">
         <h1 className="home-title">
-          {user ? `Benvenuto, ${user.email}!` : "Benvenuto"}
+          {user ? `Welcome, ${user.email}!` : "Welcome"}
         </h1>
         <p className="home-subtitle">
-          È bello rivederti qui ✨
+          Great to see you here ✨
         </p>
       </div>
     </div>

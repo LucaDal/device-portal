@@ -1,44 +1,57 @@
-import { useEffect, useState, FormEvent, useMemo } from "react";
+import { useEffect, useMemo, useState, FormEvent } from "react";
 import {
     getDeviceTypes,
     getDevices,
     createDevice,
     deleteDevice,
     updateDeviceProperties,
+    getDeviceShares,
+    shareDeviceByEmail,
+    removeDeviceShare,
+    revokeDeviceShareInvitation,
+    getMqttAclRules,
+    upsertMqttAclRule,
+    deleteMqttAclRule,
+    getDeviceCertificates,
+    upsertDeviceCertificate,
+    setDeviceCertificateEnabled,
+    deleteDeviceCertificate,
 } from "../devices/deviceService";
 import { DeviceType } from "@shared/types/device_type";
-import { DeviceWithRelations } from "@shared/types/device";
-import "../style/DevicePage.css";
+import { DeviceShareInvitationRow, DeviceShareRow, DeviceWithRelations } from "@shared/types/device";
 import { useAuth } from "../auth/AuthContext";
 import {
     PropertyType,
     PropertyRow,
     SavedProperties,
 } from "@shared/types/properties";
+import { ROLES } from "@shared/constants/auth";
+import {
+    MQTT_ACL_ACTIONS,
+    MQTT_ACL_PERMISSION,
+    MqttAclAction,
+    MqttAclPermission,
+} from "@shared/constants/mqtt";
+import { DeviceCertificateSummary, MqttAclRule } from "@shared/types/mqtt";
+import "../style/DevicePage.css";
 
 const PROPERTY_CHAR_LIMIT = 400;
 
-// Estendo la riga base con il value usato nel form
 type DevicePropertyRow = PropertyRow & { value: string };
 
-// helper: parse JSON di type_properties (schema: { key: "int" | "string" | ... })
-const parseTypeProperties = (
-    raw: unknown
-): Record<string, PropertyType> => {
+const parseTypeProperties = (raw: unknown): Record<string, PropertyType> => {
     if (!raw) return {};
     try {
         const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
         if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-            // nel DB ci aspettiamo { chiave: "int" | "float" | ... }
             return obj as Record<string, PropertyType>;
         }
     } catch (e) {
-        console.error("Impossibile parsare type_properties", e);
+        console.error("Could not parse type_properties", e);
     }
     return {};
 };
 
-// helper: parse JSON di device_properties (valori salvati: SavedProperties)
 const parseDeviceProperties = (raw: unknown): SavedProperties => {
     if (!raw) return {};
     try {
@@ -47,14 +60,12 @@ const parseDeviceProperties = (raw: unknown): SavedProperties => {
             return obj as SavedProperties;
         }
     } catch (e) {
-        console.error("Impossibile parsare device_properties", e);
+        console.error("Could not parse device_properties", e);
     }
     return {};
 };
 
-const buildPropertyRows = (
-    device: DeviceWithRelations
-): DevicePropertyRow[] => {
+const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => {
     const typeProps = parseTypeProperties(device.type_properties);
     const devProps = parseDeviceProperties(device.device_properties);
 
@@ -68,14 +79,19 @@ const buildPropertyRows = (
     });
 };
 
-const calculateTotalPropertyCharacters = (
-    rows: DevicePropertyRow[]
-): number =>
+const calculateTotalPropertyCharacters = (rows: DevicePropertyRow[]): number =>
     rows.reduce((total, { key, value }) => {
         const trimmedKey = key.trim();
         if (!trimmedKey) return total;
         return total + trimmedKey.length + value.length;
     }, 0);
+
+const formatDateTime = (value?: string | null): string => {
+    if (!value) return "-";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString();
+};
 
 const castValueForType = (
     row: DevicePropertyRow
@@ -86,27 +102,24 @@ const castValueForType = (
         case PropertyType.INT: {
             const n = parseInt(row.value, 10);
             if (Number.isNaN(n)) {
-                return { ok: false, error: `Valore non valido per "${key}" (int atteso).` };
+                return { ok: false, error: `Invalid value for "${key}" (int expected).` };
             }
             return { ok: true, value: n };
         }
-
         case PropertyType.FLOAT: {
             const n = parseFloat(row.value);
             if (Number.isNaN(n)) {
-                return { ok: false, error: `Valore non valido per "${key}" (float atteso).` };
+                return { ok: false, error: `Invalid value for "${key}" (float expected).` };
             }
             return { ok: true, value: n };
         }
-
         case PropertyType.BOOL: {
             const lower = row.value.toLowerCase();
             if (lower !== "true" && lower !== "false") {
-                return { ok: false, error: `Valore non valido per "${key}" (true/false atteso).` };
+                return { ok: false, error: `Invalid value for "${key}" (true/false expected).` };
             }
             return { ok: true, value: lower === "true" };
         }
-
         case PropertyType.STRING:
         default:
             return { ok: true, value: row.value };
@@ -114,23 +127,56 @@ const castValueForType = (
 };
 
 const DevicesPage: React.FC = () => {
+    const { user } = useAuth();
+    const canCreateDevice = user?.role === ROLES.ADMIN;
+    const isAdmin = canCreateDevice;
+
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
     const [devices, setDevices] = useState<DeviceWithRelations[]>([]);
+    const [allCertificates, setAllCertificates] = useState<DeviceCertificateSummary[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-    // form "nuovo device"
     const [code, setCode] = useState("");
     const [deviceTypeId, setDeviceTypeId] = useState<string | "">("");
-    const [ownerId, setOwnerId] = useState<string>("");
+    const [ownerEmail, setOwnerEmail] = useState("");
     const [activated, setActivated] = useState(false);
 
-    // properties per device selezionato
     const [selectedDevice, setSelectedDevice] = useState<DeviceWithRelations | null>(null);
     const [propertyRows, setPropertyRows] = useState<DevicePropertyRow[]>([]);
     const [savingProps, setSavingProps] = useState(false);
-    const { user } = useAuth();
+
+    const [aclRules, setAclRules] = useState<MqttAclRule[]>([]);
+    const [aclLoading, setAclLoading] = useState(false);
+    const [aclSaving, setAclSaving] = useState(false);
+    const [aclAction, setAclAction] = useState<MqttAclAction>(MQTT_ACL_ACTIONS.PUBLISH);
+    const [aclPermission, setAclPermission] = useState<MqttAclPermission>(MQTT_ACL_PERMISSION.ALLOW);
+    const [aclTopicPattern, setAclTopicPattern] = useState("");
+    const [aclPriority, setAclPriority] = useState("100");
+
+    const [certificates, setCertificates] = useState<DeviceCertificateSummary[]>([]);
+    const [certLoading, setCertLoading] = useState(false);
+    const [certSaving, setCertSaving] = useState(false);
+    const [certClientId, setCertClientId] = useState("");
+    const [certPem, setCertPem] = useState("");
+    const [certEnabled, setCertEnabled] = useState(true);
+    const [deviceShares, setDeviceShares] = useState<DeviceShareRow[]>([]);
+    const [shareInvitations, setShareInvitations] = useState<DeviceShareInvitationRow[]>([]);
+    const [sharingLoading, setSharingLoading] = useState(false);
+    const [sharingSaving, setSharingSaving] = useState(false);
+    const [shareEmail, setShareEmail] = useState("");
+    const [shareCanWrite, setShareCanWrite] = useState(false);
+
+    const [activeTab, setActiveTab] = useState<"create" | "list">("list");
+
+    const isSelectedDeviceOwner = Boolean(
+        selectedDevice && user && Number(selectedDevice.owner_id) === Number(user.id)
+    );
+    const canManageSharing = Boolean(selectedDevice && (isAdmin || isSelectedDeviceOwner));
+    const canEditSelectedDevice = Boolean(
+        selectedDevice && (isAdmin || isSelectedDeviceOwner || Number(selectedDevice.can_write) === 1)
+    );
 
     const totalPropertyCharacters = useMemo(
         () => calculateTotalPropertyCharacters(propertyRows),
@@ -138,18 +184,27 @@ const DevicesPage: React.FC = () => {
     );
     const isOverCharactersLimit = totalPropertyCharacters > PROPERTY_CHAR_LIMIT;
 
+    const kpis = useMemo(() => {
+        const total = devices.length;
+        const active = devices.filter((d) => Boolean(d.activated)).length;
+        const owned = devices.filter((d) => !d.is_shared).length;
+        const withCert = new Set(allCertificates.map((c) => c.device_code)).size;
+        return { total, active, owned, withCert, types: deviceTypes.length };
+    }, [devices, allCertificates, deviceTypes]);
+
     const fetchAll = async () => {
         try {
             setLoading(true);
             setError(null);
-            const [types, devs] = await Promise.all([
-                getDeviceTypes(),
-                getDevices(),
-            ]);
+            const [types, devs] = await Promise.all([getDeviceTypes(), getDevices()]);
             setDeviceTypes(types);
             setDevices(devs);
+            if (isAdmin) {
+                const certs = await getDeviceCertificates();
+                setAllCertificates(certs);
+            }
         } catch (err: any) {
-            setError(err.error || "Errore imprevisto");
+            setError(err?.error || "Unexpected error");
         } finally {
             setLoading(false);
         }
@@ -157,23 +212,68 @@ const DevicesPage: React.FC = () => {
 
     useEffect(() => {
         fetchAll();
-    }, []);
+    }, [isAdmin]);
+
+    useEffect(() => {
+        if (!canCreateDevice && activeTab === "create") {
+            setActiveTab("list");
+        }
+    }, [canCreateDevice, activeTab]);
+
+    const loadAclForDevice = async (deviceCode: string) => {
+        try {
+            setAclLoading(true);
+            const rules = await getMqttAclRules(deviceCode);
+            setAclRules(rules);
+        } catch (err: any) {
+            setError(err?.error || "Error loading MQTT ACL.");
+        } finally {
+            setAclLoading(false);
+        }
+    };
+
+    const loadCertificatesForDevice = async (deviceCode: string) => {
+        try {
+            setCertLoading(true);
+            const rows = await getDeviceCertificates();
+            setAllCertificates(rows);
+            setCertificates(rows.filter((row) => row.device_code === deviceCode));
+        } catch (err: any) {
+            setError(err?.error || "Error loading MQTT certificates.");
+        } finally {
+            setCertLoading(false);
+        }
+    };
+
+    const loadSharesForDevice = async (deviceCode: string) => {
+        try {
+            setSharingLoading(true);
+            const payload = await getDeviceShares(deviceCode);
+            setDeviceShares(payload.shares || []);
+            setShareInvitations(payload.invitations || []);
+        } catch (err: any) {
+            setError(err?.error || "Error loading device sharing.");
+            setDeviceShares([]);
+            setShareInvitations([]);
+        } finally {
+            setSharingLoading(false);
+        }
+    };
 
     const resetNewDeviceForm = () => {
         setCode("");
         setDeviceTypeId("");
-        setOwnerId("");
+        setOwnerEmail("");
         setActivated(false);
     };
 
-    // CREA DEVICE
     const handleCreateDevice = async (e: FormEvent) => {
         e.preventDefault();
         setError(null);
         setSuccessMessage(null);
 
-        if (!code.trim() || deviceTypeId === "") {
-            setError("Compila almeno code e device type.");
+        if (!code.trim() || !deviceTypeId) {
+            setError("Fill at least code and device type.");
             return;
         }
 
@@ -181,35 +281,41 @@ const DevicesPage: React.FC = () => {
             await createDevice({
                 code: code.trim(),
                 device_type_id: deviceTypeId,
-                owner_id: ownerId ? Number(ownerId) : undefined,
+                owner_email: ownerEmail.trim() || undefined,
                 activated,
             });
-
-            setSuccessMessage("Device creato con successo.");
+            setSuccessMessage("Device created successfully.");
             resetNewDeviceForm();
             await fetchAll();
+            setActiveTab("list");
         } catch (err: any) {
-            setError(err.error || "Errore durante la creazione del device.");
+            setError(err?.error || "Error while creating device.");
         }
     };
 
-    // APRI EDIT PROPERTIES PER UN DEVICE
-    const handleOpenProperties = (device: DeviceWithRelations) => {
+    const handleOpenProperties = async (device: DeviceWithRelations) => {
         setSelectedDevice(device);
         setSuccessMessage(null);
         setError(null);
-
         setPropertyRows(buildPropertyRows(device));
+        setShareEmail("");
+        setShareCanWrite(false);
+
+        if (isAdmin) {
+            await Promise.all([
+                loadAclForDevice(device.code),
+                loadCertificatesForDevice(device.code),
+                loadSharesForDevice(device.code),
+            ]);
+        } else {
+            setAclRules([]);
+            setCertificates([]);
+            await loadSharesForDevice(device.code);
+        }
     };
 
     const handleDeleteDevice = async (device: DeviceWithRelations) => {
-        if (
-            !window.confirm(
-                `Are you sure to delete device code: "${device.code}"?`
-            )
-        ) {
-            return;
-        }
+        if (!window.confirm(`Are you sure to delete device code: "${device.code}"?`)) return;
 
         setSuccessMessage(null);
         setError(null);
@@ -223,19 +329,14 @@ const DevicesPage: React.FC = () => {
                 setPropertyRows([]);
             }
         } catch (err: any) {
-            setError(
-                err.error || "Errore durante l'eliminazione del device."
-            );
+            setError(err?.error || "Error while deleting device.");
         }
     };
 
     const handlePropertyValueChange = (index: number, value: string) => {
-        setPropertyRows((prev) =>
-            prev.map((row, i) => (i === index ? { ...row, value } : row))
-        );
+        setPropertyRows((prev) => prev.map((row, i) => (i === index ? { ...row, value } : row)));
     };
 
-    // SALVA PROPERTIES PER DEVICE
     const handleSaveProperties = async () => {
         if (!selectedDevice) return;
 
@@ -246,7 +347,7 @@ const DevicesPage: React.FC = () => {
         const totalChars = calculateTotalPropertyCharacters(propertyRows);
         if (totalChars > PROPERTY_CHAR_LIMIT) {
             setError(
-                `Limite massimo di ${PROPERTY_CHAR_LIMIT} caratteri superato (totale attuale: ${totalChars}).`
+                `Maximum limit of ${PROPERTY_CHAR_LIMIT} characters exceeded (current total: ${totalChars}).`
             );
             return;
         }
@@ -261,24 +362,158 @@ const DevicesPage: React.FC = () => {
                 return;
             }
 
-            propsObj[k] = {
-                type: row.type,
-                value: castResult.value,
-            };
+            propsObj[k] = { type: row.type, value: castResult.value };
         }
 
         try {
             setSavingProps(true);
             await updateDeviceProperties(selectedDevice.code, propsObj);
-            setSuccessMessage("Proprietà del device salvate.");
+            setSuccessMessage("Device properties saved.");
             await fetchAll();
         } catch (err: any) {
-            setError(
-                err.error ||
-                    "Errore durante il salvataggio delle proprietà del device."
-            );
+            setError(err?.error || "Error while saving device properties.");
         } finally {
             setSavingProps(false);
+        }
+    };
+
+    const handleAddAclRule = async () => {
+        if (!selectedDevice || !isAdmin) return;
+        if (!aclTopicPattern.trim()) {
+            setError("Enter ACL topic pattern.");
+            return;
+        }
+        try {
+            setAclSaving(true);
+            await upsertMqttAclRule(selectedDevice.code, {
+                action: aclAction,
+                topicPattern: aclTopicPattern.trim(),
+                permission: aclPermission,
+                priority: Number(aclPriority) || 100,
+            });
+            setAclTopicPattern("");
+            setAclPriority("100");
+            await loadAclForDevice(selectedDevice.code);
+        } catch (err: any) {
+            setError(err?.error || "Error saving ACL.");
+        } finally {
+            setAclSaving(false);
+        }
+    };
+
+    const handleDeleteAclRule = async (id: number) => {
+        if (!selectedDevice || !isAdmin) return;
+        try {
+            await deleteMqttAclRule(id);
+            await loadAclForDevice(selectedDevice.code);
+        } catch (err: any) {
+            setError(err?.error || "Error deleting ACL.");
+        }
+    };
+
+    const handleCopyDeviceCode = async (deviceCode: string) => {
+        try {
+            await navigator.clipboard.writeText(deviceCode);
+            setSuccessMessage(`Code copied: ${deviceCode}`);
+        } catch {
+            setError("Could not copy device code to clipboard.");
+        }
+    };
+
+    const handleUpsertCertificate = async () => {
+        if (!selectedDevice || !isAdmin) return;
+        if (!certClientId.trim() || !certPem.trim()) {
+            setError("Enter clientId and PEM certificate.");
+            return;
+        }
+        try {
+            setCertSaving(true);
+            await upsertDeviceCertificate({
+                clientId: certClientId.trim(),
+                deviceCode: selectedDevice.code,
+                certPem: certPem.trim(),
+                enabled: certEnabled,
+            });
+            setSuccessMessage("Certificate assigned to device.");
+            setCertClientId("");
+            setCertPem("");
+            setCertEnabled(true);
+            await loadCertificatesForDevice(selectedDevice.code);
+        } catch (err: any) {
+            setError(err?.error || "Error saving certificate.");
+        } finally {
+            setCertSaving(false);
+        }
+    };
+
+    const handleToggleCertificate = async (clientId: string, enabled: boolean) => {
+        if (!selectedDevice || !isAdmin) return;
+        try {
+            await setDeviceCertificateEnabled(clientId, enabled);
+            await loadCertificatesForDevice(selectedDevice.code);
+        } catch (err: any) {
+            setError(err?.error || "Error updating certificate status.");
+        }
+    };
+
+    const handleDeleteCertificate = async (clientId: string) => {
+        if (!selectedDevice || !isAdmin) return;
+        if (!window.confirm(`Delete certificate for clientId "${clientId}"?`)) return;
+        try {
+            await deleteDeviceCertificate(clientId);
+            await loadCertificatesForDevice(selectedDevice.code);
+        } catch (err: any) {
+            setError(err?.error || "Error deleting certificate.");
+        }
+    };
+
+    const handleShareDevice = async () => {
+        if (!selectedDevice || !canManageSharing) return;
+        const email = shareEmail.trim().toLowerCase();
+        if (!email) {
+            setError("Enter an email to share this device.");
+            return;
+        }
+        try {
+            setSharingSaving(true);
+            const result = await shareDeviceByEmail(selectedDevice.code, {
+                email,
+                canWrite: shareCanWrite,
+            });
+            setShareEmail("");
+            setShareCanWrite(false);
+            setSuccessMessage(
+                result.mode === "shared"
+                    ? `Device shared with ${result.email}.`
+                    : `Invitation created for ${result.email}.`
+            );
+            await loadSharesForDevice(selectedDevice.code);
+            await fetchAll();
+        } catch (err: any) {
+            setError(err?.error || "Error while sharing device.");
+        } finally {
+            setSharingSaving(false);
+        }
+    };
+
+    const handleRemoveShare = async (targetUserId: number) => {
+        if (!selectedDevice || !canManageSharing) return;
+        try {
+            await removeDeviceShare(selectedDevice.code, targetUserId);
+            await loadSharesForDevice(selectedDevice.code);
+            await fetchAll();
+        } catch (err: any) {
+            setError(err?.error || "Error while revoking shared user.");
+        }
+    };
+
+    const handleRevokeShareInvite = async (invitationId: number) => {
+        if (!selectedDevice || !canManageSharing) return;
+        try {
+            await revokeDeviceShareInvitation(selectedDevice.code, invitationId);
+            await loadSharesForDevice(selectedDevice.code);
+        } catch (err: any) {
+            setError(err?.error || "Error while revoking invitation.");
         }
     };
 
@@ -286,17 +521,59 @@ const DevicesPage: React.FC = () => {
         <div className="devices-page">
             <header className="dt-header">
                 <h1>Devices</h1>
-                <p>Gestisci i dispositivi e i valori delle loro proprietà.</p>
+                <p>Manage devices, properties, and MQTT security from one dashboard.</p>
             </header>
 
-            <div className="dt-layout">
-                {/* CARD: NUOVO DEVICE - solo se admin */}
-                {user?.role === "admin" && (
+            <section className="device-kpi-grid">
+                <article className="device-kpi-card">
+                    <span className="device-kpi-label">Total devices</span>
+                    <strong className="device-kpi-value">{kpis.total}</strong>
+                </article>
+                <article className="device-kpi-card">
+                    <span className="device-kpi-label">Active</span>
+                    <strong className="device-kpi-value">{kpis.active}</strong>
+                </article>
+                <article className="device-kpi-card">
+                    <span className="device-kpi-label">Owned by you</span>
+                    <strong className="device-kpi-value">{kpis.owned}</strong>
+                </article>
+                <article className="device-kpi-card">
+                    <span className="device-kpi-label">Device Types</span>
+                    <strong className="device-kpi-value">{kpis.types}</strong>
+                </article>
+                {isAdmin && (
+                    <article className="device-kpi-card">
+                        <span className="device-kpi-label">With certificate</span>
+                        <strong className="device-kpi-value">{kpis.withCert}</strong>
+                    </article>
+                )}
+            </section>
+
+            {canCreateDevice && (
+                <div className="dt-tabs">
+                    <button
+                        type="button"
+                        className={`dt-btn ${activeTab === "list" ? "dt-btn-primary" : "dt-btn-outline"}`}
+                        onClick={() => setActiveTab("list")}
+                    >
+                        Device list
+                    </button>
+                    <button
+                        type="button"
+                        className={`dt-btn ${activeTab === "create" ? "dt-btn-primary" : "dt-btn-outline"}`}
+                        onClick={() => setActiveTab("create")}
+                    >
+                        New device
+                    </button>
+                </div>
+            )}
+
+            <div className="devices-content">
+                {canCreateDevice && activeTab === "create" && (
                     <section className="dt-card dt-form-card">
                         <div className="dt-form-header">
-                            <h2>Nuovo device</h2>
+                            <h2>New device</h2>
                         </div>
-
                         <form className="dt-form" onSubmit={handleCreateDevice}>
                             <div className="dt-form-group">
                                 <label htmlFor="code">Code</label>
@@ -305,7 +582,7 @@ const DevicesPage: React.FC = () => {
                                     type="text"
                                     value={code}
                                     onChange={(e) => setCode(e.target.value)}
-                                    placeholder="Es. DEV-001"
+                                    placeholder="e.g. DEV-001"
                                 />
                             </div>
 
@@ -314,35 +591,25 @@ const DevicesPage: React.FC = () => {
                                 <select
                                     id="deviceType"
                                     value={deviceTypeId}
-                                    onChange={(e) =>
-                                        setDeviceTypeId(
-                                            e.target.value
-                                                ? String(e.target.value)
-                                                : ""
-                                        )
-                                    }
+                                    onChange={(e) => setDeviceTypeId(e.target.value ? String(e.target.value) : "")}
                                 >
-                                    <option value="">Seleziona...</option>
+                                    <option value="">Select...</option>
                                     {deviceTypes.map((dt) => (
                                         <option key={dt.id} value={dt.id}>
-                                            #{dt.id} - {dt.description} (FW{" "}
-                                            {dt.firmware_version})
+                                            #{dt.id} - {dt.description} (FW {dt.firmware_version})
                                         </option>
                                     ))}
                                 </select>
                             </div>
 
                             <div className="dt-form-group">
-                                <label htmlFor="ownerId">
-                                    Owner ID (opzionale)
-                                </label>
+                                <label htmlFor="ownerEmail">Owner email (optional)</label>
                                 <input
-                                    id="ownerId"
-                                    type="number"
-                                    value={ownerId}
-                                    onChange={(e) =>
-                                        setOwnerId(e.target.value)
-                                    }
+                                    id="ownerEmail"
+                                    type="email"
+                                    value={ownerEmail}
+                                    onChange={(e) => setOwnerEmail(e.target.value)}
+                                    placeholder="owner@example.com"
                                 />
                             </div>
 
@@ -352,194 +619,469 @@ const DevicesPage: React.FC = () => {
                                         id="activated"
                                         type="checkbox"
                                         checked={activated}
-                                        onChange={(e) =>
-                                            setActivated(e.target.checked)
-                                        }
+                                        onChange={(e) => setActivated(e.target.checked)}
                                     />{" "}
-                                    Attivato
+                                    Activated
                                 </label>
                             </div>
 
-                            {error && (
-                                <div className="dt-alert dt-alert-error">
-                                    {error}
-                                </div>
-                            )}
-                            {successMessage && (
-                                <div className="dt-alert dt-alert-success">
-                                    {successMessage}
-                                </div>
-                            )}
+                            {error && <div className="dt-alert dt-alert-error">{error}</div>}
+                            {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
 
-                            <button
-                                type="submit"
-                                className="dt-btn dt-btn-primary"
-                            >
-                                Crea device
+                            <button type="submit" className="dt-btn dt-btn-primary">
+                                Create device
                             </button>
                         </form>
                     </section>
                 )}
 
-                {/* CARD: LISTA DEVICES + PROPERTIES */}
-                <section className="dt-card dt-table-card">
-                    <div className="dt-table-header">
-                        <h2>Lista devices</h2>
-                        <button
-                            className="dt-btn dt-btn-outline"
-                            onClick={fetchAll}
-                        >
-                            Aggiorna
-                        </button>
-                    </div>
-
-                    {loading ? (
-                        <div className="dt-loading">Caricamento...</div>
-                    ) : devices.length === 0 ? (
-                        <p className="dt-empty">Nessun device presente.</p>
-                    ) : (
-                        <div className="dt-table-wrapper">
-                            <table className="dt-table">
-                                <thead>
-                                    <tr>
-                                        <th>Code</th>
-                                        <th>Type</th>
-                                        <th>Owner</th>
-                                        <th>Attivo</th>
-                                        <th>Azione</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {devices.map((d) => (
-                                        <tr key={d.code}>
-                                            <td>{d.code}</td>
-                                            <td>
-                                                {d.device_type_description ??
-                                                    `type ${d.device_type_id}`}
-                                            </td>
-                                            <td>{d.owner_id ?? "-"}</td>
-                                            <td>{d.activated ? "✔︎" : "✗"}</td>
-                                            <td>
-                                                <div className="dt-actions">
-                                                    <button
-                                                        className="dt-btn dt-btn-xs"
-                                                        type="button"
-                                                        onClick={() =>
-                                                            handleOpenProperties(
-                                                                d
-                                                            )
-                                                        }
-                                                    >
-                                                        Properties
-                                                    </button>
-                                                </div>
-                                                <div className="dt-actions">
-                                                    <button
-                                                        className="dt-btn dt-btn-xs dt-btn-danger"
-                                                        type="button"
-                                                        onClick={() =>
-                                                            handleDeleteDevice(
-                                                                d
-                                                            )
-                                                        }
-                                                    >
-                                                        Delete
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                {activeTab === "list" && (
+                    <section className="dt-card dt-table-card">
+                        <div className="dt-table-header">
+                            <h2>Device list</h2>
+                            <button className="dt-btn dt-btn-outline" onClick={fetchAll}>
+                                Refresh
+                            </button>
                         </div>
-                    )}
 
-                    {/* FORM PROPERTIES PER DEVICE SELEZIONATO */}
-                    <div className="dt-divider" />
-
-                    <div className="dt-properties-panel">
-                        <h3>Proprietà device</h3>
-                        {selectedDevice ? (
-                            <>
-                                <p className="dt-small">
-                                    Device{" "}
-                                    <strong>{selectedDevice.code}</strong>{" "}
-                                    (
-                                    {selectedDevice.device_type_description ??
-                                        `type #${selectedDevice.device_type_id}`}
-                                    )
-                                </p>
-
-                                {propertyRows.length === 0 ? (
-                                    <p className="dt-empty">
-                                        Nessuna proprietà definita nel device
-                                        type.
-                                    </p>
-                                ) : (
-                                    <div className="dt-props-list">
-                                        {propertyRows.map((row, index) => (
-                                            <div key={row.key} className="dt-prop-row">
-                                                <div className="dt-prop-key">
-                                                    <strong>{row.key}</strong>{" "}
-                                                    <span className="dt-chip">
-                                                        {row.type}
-                                                    </span>
-                                                </div>
-                                                <input
-                                                    type="text"
-                                                    value={row.value}
-                                                    onChange={(e) =>
-                                                        handlePropertyValueChange(
-                                                            index,
-                                                            e.target.value
-                                                        )
-                                                    }
-                                                    placeholder={
-                                                        row.type ===
-                                                        PropertyType.BOOL
-                                                            ? "true / false"
-                                                            : "Valore"
-                                                    }
-                                                />
-                                            </div>
+                        {loading ? (
+                            <div className="dt-loading">Loading...</div>
+                        ) : devices.length === 0 ? (
+                            <p className="dt-empty">No devices found.</p>
+                        ) : (
+                            <div className="dt-table-wrapper">
+                                <table className="dt-table device-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Code</th>
+                                            <th>Type</th>
+                                            <th>Owner</th>
+                                            <th>Active</th>
+                                            <th className="device-action-col">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {devices.map((d) => (
+                                            <tr key={d.code}>
+                                                <td>{d.code}</td>
+                                                <td>{d.device_type_description ?? `type ${d.device_type_id}`}</td>
+                                                <td>{d.owner_email ?? (d.owner_id ? `#${d.owner_id}` : "-")}</td>
+                                                <td>{d.activated ? "✔" : "✗"}</td>
+                                                <td className="device-action-col">
+                                                    <div className="dt-actions">
+                                                        <button
+                                                            className="dt-btn dt-btn-xs device-table-btn device-table-btn-primary"
+                                                            type="button"
+                                                            onClick={() => handleOpenProperties(d)}
+                                                        >
+                                                            Properties
+                                                        </button>
+                                                        <button
+                                                            className="dt-btn dt-btn-xs device-table-btn device-table-btn-outline"
+                                                            type="button"
+                                                            onClick={() => handleCopyDeviceCode(d.code)}
+                                                        >
+                                                            Copy code
+                                                        </button>
+                                                        {isAdmin && (
+                                                            <button
+                                                                className="dt-btn dt-btn-xs device-table-btn device-table-btn-danger"
+                                                                type="button"
+                                                                onClick={() => handleDeleteDevice(d)}
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
                                         ))}
-                                    </div>
-                                )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
 
-                                <div
-                                    className={
-                                        isOverCharactersLimit
-                                            ? "dt-alert dt-alert-error"
-                                            : "dt-small"
-                                    }
-                                >
-                                    Totale caratteri (chiave + valore):{" "}
-                                    <strong>
-                                        {totalPropertyCharacters}/
-                                        {PROPERTY_CHAR_LIMIT}
-                                    </strong>
+                        <div className="dt-divider" />
+
+                        {!selectedDevice ? (
+                            <p className="dt-empty">Select a device to open details.</p>
+                        ) : (
+                            <>
+                                <div className="device-detail-header">
+                                    <h3>Device details</h3>
+                                    <p className="dt-small">
+                                        <strong>{selectedDevice.code}</strong> (
+                                        {selectedDevice.device_type_description ?? `type #${selectedDevice.device_type_id}`})
+                                    </p>
                                 </div>
 
-                                <button
-                                    type="button"
-                                    className="dt-btn dt-btn-primary"
-                                    onClick={handleSaveProperties}
-                                    disabled={savingProps || isOverCharactersLimit}
-                                >
-                                    {savingProps
-                                        ? "Salvataggio..."
-                                        : "Salva proprietà device"}
-                                </button>
+                                <div className={isAdmin ? "device-detail-grid" : "device-detail-grid single"}>
+                                    <section className="dt-properties-panel dt-card-sub">
+                                        <div className="device-subhead">
+                                            <h4>Properties</h4>
+                                        </div>
+
+                                        {propertyRows.length === 0 ? (
+                                            <p className="dt-empty">No properties defined in the device type.</p>
+                                        ) : (
+                                            <div className="dt-props-list">
+                                                {propertyRows.map((row, index) => (
+                                                    <div key={row.key} className="dt-prop-row">
+                                                        <div className="dt-prop-key">
+                                                            <strong>{row.key}</strong>
+                                                            <span className="dt-chip">{row.type}</span>
+                                                        </div>
+                                                        <input
+                                                            type="text"
+                                                            value={row.value}
+                                                            disabled={!canEditSelectedDevice}
+                                                            onChange={(e) => handlePropertyValueChange(index, e.target.value)}
+                                                            placeholder={
+                                                                row.type === PropertyType.BOOL ? "true / false" : "Value"
+                                                            }
+                                                        />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        <div
+                                            className={
+                                                isOverCharactersLimit ? "dt-alert dt-alert-error" : "dt-small"
+                                            }
+                                        >
+                                            Total characters (key + value):{" "}
+                                            <strong>
+                                                {totalPropertyCharacters}/{PROPERTY_CHAR_LIMIT}
+                                            </strong>
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            className="dt-btn dt-btn-primary"
+                                            onClick={handleSaveProperties}
+                                            disabled={savingProps || isOverCharactersLimit || !canEditSelectedDevice}
+                                        >
+                                            {savingProps ? "Saving..." : "Save properties"}
+                                        </button>
+
+                                        <div className="dt-divider" />
+                                        <h5>Sharing</h5>
+                                        <p className="dt-small">
+                                            Share this device with other users. Existing users are linked immediately;
+                                            non-registered emails receive a pending invitation.
+                                        </p>
+
+                                        {sharingLoading ? (
+                                            <p className="dt-loading">Loading sharing...</p>
+                                        ) : (
+                                            <>
+                                                {canManageSharing && (
+                                                    <>
+                                                        <div className="dt-form-group">
+                                                            <label htmlFor="shareEmail">User email</label>
+                                                            <input
+                                                                id="shareEmail"
+                                                                type="email"
+                                                                value={shareEmail}
+                                                                onChange={(e) => setShareEmail(e.target.value)}
+                                                                placeholder="name@example.com"
+                                                            />
+                                                        </div>
+                                                        <div className="dt-actions">
+                                                            <label className="dt-small">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={shareCanWrite}
+                                                                    onChange={(e) => setShareCanWrite(e.target.checked)}
+                                                                />{" "}
+                                                                Write access
+                                                            </label>
+                                                            <button
+                                                                type="button"
+                                                                className="dt-btn dt-btn-primary"
+                                                                onClick={handleShareDevice}
+                                                                disabled={sharingSaving}
+                                                            >
+                                                                {sharingSaving ? "Sharing..." : "Share device"}
+                                                            </button>
+                                                        </div>
+                                                    </>
+                                                )}
+
+                                                <div className="dt-props-list compact">
+                                                    {deviceShares.length === 0 ? (
+                                                        <p className="dt-empty">No users currently sharing this device.</p>
+                                                    ) : (
+                                                        deviceShares.map((share) => (
+                                                            <div
+                                                                key={`${share.device_code}:${share.user_id}`}
+                                                                className="dt-prop-row"
+                                                            >
+                                                                <div className="dt-prop-key">
+                                                                    <strong>{share.user_email}</strong>
+                                                                    <span className="dt-chip">
+                                                                        {share.can_write ? "write" : "read"}
+                                                                    </span>
+                                                                    <span className="dt-chip">
+                                                                        since {formatDateTime(share.created_at)}
+                                                                    </span>
+                                                                </div>
+                                                                {canManageSharing ? (
+                                                                    <div className="dt-actions">
+                                                                        <button
+                                                                            type="button"
+                                                                            className="dt-btn dt-btn-xs dt-btn-danger"
+                                                                            onClick={() => handleRemoveShare(share.user_id)}
+                                                                        >
+                                                                            Revoke
+                                                                        </button>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div />
+                                                                )}
+                                                            </div>
+                                                        ))
+                                                    )}
+                                                </div>
+
+                                                <h5>Pending invitations</h5>
+                                                <div className="dt-props-list compact">
+                                                    {shareInvitations.length === 0 ? (
+                                                        <p className="dt-empty">No pending invitations.</p>
+                                                    ) : (
+                                                        shareInvitations.map((inv) => (
+                                                            <div key={inv.id} className="dt-prop-row">
+                                                                <div className="dt-prop-key">
+                                                                    <strong>{inv.email}</strong>
+                                                                    <span className="dt-chip">
+                                                                        {inv.can_write ? "write" : "read"}
+                                                                    </span>
+                                                                    <span className="dt-chip">
+                                                                        expires {formatDateTime(inv.expires_at)}
+                                                                    </span>
+                                                                </div>
+                                                                {canManageSharing ? (
+                                                                    <div className="dt-actions">
+                                                                        <button
+                                                                            type="button"
+                                                                            className="dt-btn dt-btn-xs dt-btn-danger"
+                                                                            onClick={() => handleRevokeShareInvite(inv.id)}
+                                                                        >
+                                                                            Revoke
+                                                                        </button>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div />
+                                                                )}
+                                                            </div>
+                                                        ))
+                                                    )}
+                                                </div>
+                                            </>
+                                        )}
+                                    </section>
+
+                                    {isAdmin && (
+                                        <section className="dt-properties-panel dt-card-sub">
+                                            <h4>Security</h4>
+
+                                            <div className="dt-divider" />
+                                            <h5>MQTT ACL</h5>
+                                            <div className="dt-props-list compact">
+                                                {aclLoading ? (
+                                                    <p className="dt-loading">Loading ACL...</p>
+                                                ) : aclRules.length === 0 ? (
+                                                    <p className="dt-empty">No ACL configured.</p>
+                                                ) : (
+                                                    aclRules.map((rule) => (
+                                                        <div key={rule.id} className="dt-prop-row">
+                                                            <div className="dt-prop-key">
+                                                                <strong>{rule.topic_pattern}</strong>
+                                                                <span className="dt-chip">{rule.action}</span>
+                                                                <span className="dt-chip">{rule.permission}</span>
+                                                                <span className="dt-chip">Priority {rule.priority}</span>
+                                                            </div>
+                                                            <div className="dt-actions">
+                                                                <button
+                                                                    type="button"
+                                                                    className="dt-btn dt-btn-xs dt-btn-danger"
+                                                                    onClick={() => handleDeleteAclRule(rule.id)}
+                                                                >
+                                                                    Delete
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+
+                                            <div className="dt-form-group">
+                                                <label htmlFor="aclTopic">Topic Pattern</label>
+                                                <input
+                                                    id="aclTopic"
+                                                    type="text"
+                                                    value={aclTopicPattern}
+                                                    onChange={(e) => setAclTopicPattern(e.target.value)}
+                                                    placeholder="devices/DEVICE_CODE/telemetry/#"
+                                                />
+                                            </div>
+                                            <div className="security-acl-grid">
+                                                <div className="dt-form-group">
+                                                    <label htmlFor="aclAction">Action</label>
+                                                    <select
+                                                        id="aclAction"
+                                                        value={aclAction}
+                                                        onChange={(e) =>
+                                                            setAclAction(e.target.value as MqttAclAction)
+                                                        }
+                                                    >
+                                                        <option value={MQTT_ACL_ACTIONS.PUBLISH}>publish</option>
+                                                        <option value={MQTT_ACL_ACTIONS.SUBSCRIBE}>subscribe</option>
+                                                        <option value={MQTT_ACL_ACTIONS.ALL}>all</option>
+                                                    </select>
+                                                </div>
+                                                <div className="dt-form-group">
+                                                    <label htmlFor="aclPermission">Permission</label>
+                                                    <select
+                                                        id="aclPermission"
+                                                        value={aclPermission}
+                                                        onChange={(e) =>
+                                                            setAclPermission(e.target.value as MqttAclPermission)
+                                                        }
+                                                    >
+                                                        <option value={MQTT_ACL_PERMISSION.ALLOW}>allow</option>
+                                                        <option value={MQTT_ACL_PERMISSION.DENY}>deny</option>
+                                                    </select>
+                                                </div>
+                                                <div className="dt-form-group">
+                                                    <label htmlFor="aclPriority">Priority</label>
+                                                    <input
+                                                        id="aclPriority"
+                                                        type="number"
+                                                        min={0}
+                                                        step={1}
+                                                        value={aclPriority}
+                                                        onChange={(e) => setAclPriority(e.target.value)}
+                                                        placeholder="100"
+                                                    />
+                                                </div>
+                                                <div className="security-acl-submit">
+                                                    <button
+                                                        type="button"
+                                                        className="dt-btn dt-btn-primary"
+                                                        onClick={handleAddAclRule}
+                                                        disabled={aclSaving}
+                                                    >
+                                                        {aclSaving ? "Saving..." : "Add ACL"}
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div className="dt-divider" />
+                                            <h5>MQTT Certificates</h5>
+                                            <p className="dt-small">
+                                                Assign a PEM certificate to the selected device for MQTT mTLS auth.
+                                            </p>
+                                            <div className="dt-props-list compact">
+                                                {certLoading ? (
+                                                    <p className="dt-loading">Loading certificates...</p>
+                                                ) : certificates.length === 0 ? (
+                                                    <p className="dt-empty">No certificate assigned.</p>
+                                                ) : (
+                                                    certificates.map((cert) => (
+                                                        <div key={cert.client_id} className="dt-prop-row">
+                                                            <div className="dt-prop-key">
+                                                                <strong>{cert.client_id}</strong>
+                                                                <span className="dt-chip">
+                                                                    {cert.enabled ? "enabled" : "disabled"}
+                                                                </span>
+                                                                <span className="dt-chip">
+                                                                    {cert.cert_fingerprint_sha256.slice(0, 16)}...
+                                                                </span>
+                                                            </div>
+                                                            <div className="dt-actions">
+                                                                <button
+                                                                    type="button"
+                                                                    className="dt-btn dt-btn-xs dt-btn-outline"
+                                                                    onClick={() =>
+                                                                        handleToggleCertificate(
+                                                                            cert.client_id,
+                                                                            !Boolean(cert.enabled)
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    {cert.enabled ? "Disable" : "Enable"}
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    className="dt-btn dt-btn-xs dt-btn-danger"
+                                                                    onClick={() =>
+                                                                        handleDeleteCertificate(cert.client_id)
+                                                                    }
+                                                                >
+                                                                    Delete
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+
+                                            <div className="dt-form-group">
+                                                <label htmlFor="mqttClientId">Client ID</label>
+                                                <input
+                                                    id="mqttClientId"
+                                                    type="text"
+                                                    value={certClientId}
+                                                    onChange={(e) => setCertClientId(e.target.value)}
+                                                    placeholder={`es. ${selectedDevice.code}-esp32`}
+                                                />
+                                            </div>
+                                            <div className="dt-form-group">
+                                                <label htmlFor="mqttCertPem">Certificate PEM</label>
+                                                <textarea
+                                                    id="mqttCertPem"
+                                                    value={certPem}
+                                                    onChange={(e) => setCertPem(e.target.value)}
+                                                    placeholder="-----BEGIN CERTIFICATE-----"
+                                                    rows={8}
+                                                />
+                                            </div>
+                                            <div className="security-cert-footer">
+                                                <div className="security-cert-meta">
+                                                    <label className="dt-small">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={certEnabled}
+                                                            onChange={(e) => setCertEnabled(e.target.checked)}
+                                                        />{" "}
+                                                        Enabled
+                                                    </label>
+                                                    <span className="dt-small">
+                                                        If disabled, this certificate cannot authenticate MQTT clients.
+                                                    </span>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    className="dt-btn dt-btn-primary"
+                                                    onClick={handleUpsertCertificate}
+                                                    disabled={certSaving}
+                                                >
+                                                    {certSaving ? "Saving..." : "Assign certificate"}
+                                                </button>
+                                            </div>
+                                        </section>
+                                    )}
+                                </div>
                             </>
-                        ) : (
-                            <p className="dt-empty">
-                                Seleziona un device per modificare le
-                                proprietà.
-                            </p>
                         )}
-                    </div>
-                </section>
+                    </section>
+                )}
             </div>
+
+            {error && <div className="dt-alert dt-alert-error">{error}</div>}
+            {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
         </div>
     );
 };

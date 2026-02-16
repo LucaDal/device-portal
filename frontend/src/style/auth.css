@@ -49,6 +49,40 @@ input:focus {
   border-color: #58a6ff;
 }
 
+/* Keep selected text readable on dark inputs */
+input::selection {
+  background: rgba(88, 166, 255, 0.45);
+  color: #f3f4f6;
+}
+
+input::-moz-selection {
+  background: rgba(88, 166, 255, 0.45);
+  color: #f3f4f6;
+}
+
+/* Fix dark theme + browser autofill (Chrome/Edge/Safari) */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: #f3f4f6;
+  caret-color: #f3f4f6;
+  -webkit-box-shadow: 0 0 0px 1000px #0d1117 inset;
+  box-shadow: 0 0 0px 1000px #0d1117 inset;
+  border: 1px solid #30363d;
+  transition: background-color 9999s ease-out 0s;
+}
+
+input:-webkit-autofill:focus {
+  border-color: #58a6ff;
+  -webkit-box-shadow:
+    0 0 0 1000px #0d1117 inset,
+    0 0 0 2px rgba(88, 166, 255, 0.35);
+  box-shadow:
+    0 0 0 1000px #0d1117 inset,
+    0 0 0 2px rgba(88, 166, 255, 0.35);
+}
+
 .auth-btn {
   margin-top: 20px;
   width: 100%;
@@ -155,4 +189,3 @@ input:focus {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
-

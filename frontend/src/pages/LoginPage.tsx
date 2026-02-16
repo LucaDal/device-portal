@@ -20,6 +20,10 @@ export default function LoginPage() {
         try {
             const ret = await apiLogin({ email, password });
             login(ret.user, ret.token);
+            if (ret.user.must_change_password) {
+                navigate("/change-password");
+                return;
+            }
             navigate("/");
         } catch (err: any) {
             setError(err.error || "Server Unreachable");
@@ -29,7 +33,7 @@ export default function LoginPage() {
     return (
         <div className="auth-container">
             <div className="auth-card">
-                <h2>Accedi</h2>
+                <h2>Sign in</h2>
 
                 {error && <div className="auth-error">{error}</div>}
 
@@ -54,10 +58,6 @@ export default function LoginPage() {
 
                     <button className="auth-btn" type="submit">Login</button>
                 </form>
-
-                <p className="auth-switch">
-                    Non hai un account? <a href="/signup">Registrati</a>
-                </p>
             </div>
         </div>
     );

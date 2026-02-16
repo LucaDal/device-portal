@@ -1,3 +1,5 @@
+import { AUTH_ERROR_CODES } from "@shared/constants/auth";
+
 const getDefaultApiBase = () => {
     if (typeof window === "undefined") {
         return "/api";
@@ -36,19 +38,23 @@ const handleUnauthorized = () => {
 };
 
 export async function apiFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const mergedHeaders: HeadersInit = {
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+    };
     const res = await fetch(`${API_BASE}${url}`, {
-        headers: {
-            "Content-Type": "application/json",
-            ...(options.headers || {})
-        },
+        ...options,
+        headers: mergedHeaders,
         credentials: "include",
-        ...options
     });
     if (!res.ok) {
         if (res.status === 401) {
             handleUnauthorized();
         }
         const err = await res.json();
+        if (res.status === 403 && err?.code === AUTH_ERROR_CODES.PASSWORD_CHANGE_REQUIRED) {
+            window.location.href = "/change-password";
+        }
         console.error(err);
         return Promise.reject(err);
     }
@@ -57,11 +63,13 @@ export async function apiFetch<T>(url: string, options: RequestInit = {}): Promi
 }
 
 export async function apiFetchWithAuth<T>(url: string, options: RequestInit = {}): Promise<T> {
+    const mergedHeaders: HeadersInit = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${localStorage.getItem("token")}`,
+        ...(options.headers || {})
+    };
     return await apiFetch<T>(url, {
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${localStorage.getItem("token")}`
-        },
+        headers: mergedHeaders,
         ...options
     });
 }
@@ -84,7 +92,7 @@ export async function apiFetchFD(url: string, method: string, data?: FormData | 
         }
         const errBody = await res.json().catch(() => ({}));
         throw new Error(
-            errBody.error || "Errore durante il salvataggio del device type"
+            errBody.error || "Error while saving device type"
         );
     }
     return res;

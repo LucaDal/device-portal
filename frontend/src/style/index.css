@@ -47,7 +47,7 @@ html, body {
 }
 
 .header nav button {
-    background-color: #3b82f6;
+    background-color: #2563eb;
     color: #f3f4f6;
     border: none;
     padding: 0.5rem 1rem;
@@ -56,7 +56,7 @@ html, body {
 }
 
 .header nav button:hover {
-    background-color: #2563eb;
+    background-color: #3b82f6;
 }
 
 /* ===== Layout ===== */
@@ -70,9 +70,9 @@ html, body {
 
 /* ===== Sidebar ===== */
 .sidebar {
-    width: 220px;
+    width: 240px;
     background-color: #111827;
-    padding: 1rem;
+    padding: 0.7rem;
     border-right: 1px solid #374151;
     min-height: calc(100vh - 64px);
     display: flex;
@@ -81,22 +81,56 @@ html, body {
     top: 64px;
 }
 
-.sidebar ul {
+.sidebar-heading {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #9ca3af;
+    margin-bottom: 0.35rem;
+    padding: 0 0.25rem;
+}
+
+.sidebar-menu {
     list-style: none;
     padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border-top: 1px solid #1f2a3d;
 }
 
 .sidebar li {
-    margin-bottom: 1rem;
+    margin-bottom: 0;
+    border-bottom: 1px solid #1f2a3d;
 }
 
-.sidebar a {
+.sidebar-link {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 40px;
+    padding: 0.55rem 0.4rem;
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    color: #cbd5e1;
+    font-size: 0.95rem;
     text-decoration: none;
-    color: #3b82f6;
+    font-weight: 500;
+    transition: color 0.12s ease, background-color 0.12s ease;
 }
 
-.sidebar a:hover {
-    color: #60a5fa;
+.sidebar-link:hover {
+    background: rgba(59, 130, 246, 0.12);
+    color: #eff6ff;
+    text-decoration: none;
+}
+
+.sidebar-link.is-active {
+    background: rgba(37, 99, 235, 0.24);
+    color: #eff6ff;
+    border-left: 2px solid #60a5fa;
+    padding-left: calc(0.4rem - 2px);
 }
 
 /* ===== Main Content ===== */
@@ -105,7 +139,12 @@ html, body {
     overflow-y: auto;
     background-color: #1f2937;
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
+    align-items: stretch;
+}
+
+.main-content > * {
+    width: 100%;
 }
 
 /* ===== Buttons & Inputs ===== */
@@ -146,6 +185,13 @@ a:hover {
         height: auto;
         border-right: none;
         border-bottom: 1px solid #374151;
+    }
+    .sidebar-menu {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .sidebar-link {
+        justify-content: center;
     }
     .main-content {
         padding: 1rem;

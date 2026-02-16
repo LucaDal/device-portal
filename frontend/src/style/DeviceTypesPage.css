@@ -2,12 +2,14 @@
 
 .device-types-page {
     min-height: calc(100vh - 64px);
-    padding: 2rem;
+    padding: 1.5rem;
     background: #1f2937;
     color: #f3f4f6;
     width: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
+    flex: 1 1 auto;
+    max-width: none;
+    margin: 0;
+    align-self: stretch;
 }
 
 .dt-card {
@@ -19,6 +21,28 @@
     gap: 1rem;
 }
 
+.device-types-page .dt-layout {
+    max-width: none;
+    margin: 0;
+    width: 100%;
+}
+
 .dt-table-card .dt-table-wrapper {
     margin-top: 1rem;
+}
+
+.dt-file-input {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.dt-file-input-native {
+    display: none;
+}
+
+.dt-file-input-name {
+    font-size: 0.85rem;
+    color: #cbd5e1;
 }

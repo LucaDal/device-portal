@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { registerDeviceByCode } from "../devices/deviceService";
 import { useAuth } from "../auth/AuthContext";
-import "../style/DevicePage.css"; // riuso lo stesso tema
+import "../style/SinglePanelPage.css";
 
 const AddDevicePage: React.FC = () => {
     const { user } = useAuth();
@@ -17,19 +17,19 @@ const AddDevicePage: React.FC = () => {
         setSuccessMessage(null);
 
         if (!code.trim()) {
-            setError("Inserisci il code del dispositivo.");
+            setError("Enter the device code.");
             return;
         }
 
         try {
             setSubmitting(true);
             await registerDeviceByCode(code.trim());
-            setSuccessMessage("Dispositivo aggiunto correttamente.");
+            setSuccessMessage("Device added successfully.");
             setCode("");
         } catch (err: any) {
             setError(
                 err?.message ||
-                    "Errore durante l'aggiunta del dispositivo. Verifica il code."
+                    "Error while adding the device. Please verify the code."
             );
         } finally {
             setSubmitting(false);
@@ -37,19 +37,19 @@ const AddDevicePage: React.FC = () => {
     };
 
     return (
-        <div className="devices-page">
-            <header className="dt-header">
-                <h1>Aggiungi dispositivo</h1>
+        <div className="single-page">
+            <header className="single-page-header">
+                <h1>Add device</h1>
                 <p>
-                    Inserisci il <strong>code</strong> del dispositivo per
-                    associarlo al tuo account.
+                    Enter the <strong>code</strong> of the device to
+                    associate it with your account.
                 </p>
             </header>
 
-            <div className="dt-layout">
-                <section className="dt-card dt-form-card">
+            <div className="single-page-layout">
+                <section className="dt-card single-page-card">
                     <div className="dt-form-header">
-                        <h2>Inserisci code dispositivo</h2>
+                        <h2>Enter device code</h2>
                     </div>
 
                     {!user ? (
@@ -66,7 +66,7 @@ const AddDevicePage: React.FC = () => {
                                     type="text"
                                     value={code}
                                     onChange={(e) => setCode(e.target.value)}
-                                    placeholder="Es. ABCD-1234-TOKEN"
+                                    placeholder="Eg. ABCD-1234-TOKEN"
                                 />
                             </div>
 
@@ -87,8 +87,8 @@ const AddDevicePage: React.FC = () => {
                                 disabled={submitting}
                             >
                                 {submitting
-                                    ? "Aggiunta in corso..."
-                                    : "Aggiungi dispositivo"}
+                                    ? "Adding..."
+                                    : "Add device"}
                             </button>
                         </form>
                     )}
@@ -99,4 +99,3 @@ const AddDevicePage: React.FC = () => {
 };
 
 export default AddDevicePage;
-

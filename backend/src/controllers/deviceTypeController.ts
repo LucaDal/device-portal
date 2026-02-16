@@ -43,7 +43,7 @@ export const DeviceTypeController = {
         if (req.file && req.file.size > MAX_SIZE) {
             return res
                 .status(400)
-                .json({ error: "File troppo grande (max 10MB)" });
+                .json({ error: "File too large (max 10MB)" });
         }
 
         const { description, firmware_version } = req.body;
@@ -53,7 +53,7 @@ export const DeviceTypeController = {
         if (!firmware_version?.trim()) {
             return res
                 .status(400)
-                .json({ error: "Campi obbligatori mancanti" });
+                .json({ error: "Missing required fields" });
         }
 
         // Validazione JSON di properties

@@ -8,11 +8,10 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["../shared/*"]
+      "@shared/*": ["dist/shared/*", "../shared/*"]
     },
     "typeRoots": ["./node_modules/@types"]
   },
   "include": ["src/**/*", "../shared/**/*"],
   "exclude": ["dist"]
 }
-

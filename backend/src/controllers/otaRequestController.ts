@@ -12,7 +12,7 @@ function parseSavedProperties(raw: unknown): SavedProperties {
             return parsed as SavedProperties;
         }
     } catch (e) {
-        console.error("Errore nel parse delle properties OTA", e);
+        console.error("Error parsing OTA properties", e);
     }
     return {};
 }

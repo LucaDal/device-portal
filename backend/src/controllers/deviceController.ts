@@ -1,33 +1,79 @@
 import { DB } from "../config/database";
 import crypto from "crypto";
+import { ROLES } from "@shared/constants/auth";
+
+const SHARE_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function normalizeEmail(value: string): string {
+    return String(value || "").trim().toLowerCase();
+}
+
+function isValidEmail(value: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function getCurrentUser(req: any) {
+    const userId = Number((req.user as any).id);
+    const role = String((req.user as any).role || "");
+    return { userId, role };
+}
+
+function canManageSharesOrDelete(userId: number, role: string, deviceCode: string): boolean {
+    if (role === ROLES.ADMIN) return true;
+    const owned = DB.prepare("SELECT 1 FROM devices WHERE code = ? AND owner_id = ? LIMIT 1").get(
+        deviceCode,
+        userId
+    );
+    return Boolean(owned);
+}
+
+function canWriteDeviceProperties(userId: number, role: string, deviceCode: string): boolean {
+    if (role === ROLES.ADMIN) return true;
+    const owned = DB.prepare("SELECT 1 FROM devices WHERE code = ? AND owner_id = ? LIMIT 1").get(
+        deviceCode,
+        userId
+    );
+    if (owned) return true;
+    const sharedWrite = DB.prepare(
+        "SELECT 1 FROM device_shares WHERE device_code = ? AND user_id = ? AND can_write = 1 LIMIT 1"
+    ).get(deviceCode, userId);
+    return Boolean(sharedWrite);
+}
 
 export const DeviceController = {
 
     // GET /devices
     list(req: any, res: any) {
-        const userId = Number((req.user as any).id);
-        const role = (req.user as any).role;
-        // query base (senza WHERE)
+        const { userId, role } = getCurrentUser(req);
         let sql = `
             SELECT
                 d.code,
                 d.device_type_id,
                 d.owner_id,
+                ou.email AS owner_email,
                 d.activated,
+                CASE WHEN ds.user_id IS NULL THEN 0 ELSE 1 END AS is_shared,
+                CASE
+                    WHEN d.owner_id = ? OR ? = '${ROLES.ADMIN}' THEN 1
+                    ELSE COALESCE(ds.can_write, 0)
+                END AS can_write,
                 dt.description AS device_type_description,
                 dt.firmware_version,
                 dt.properties AS type_properties,
                 dp.properties AS device_properties
             FROM devices d
             JOIN device_types dt ON dt.id = d.device_type_id
+            LEFT JOIN users ou ON ou.id = d.owner_id
             LEFT JOIN device_properties dp ON dp.device_code = d.code
+            LEFT JOIN device_shares ds
+                ON ds.device_code = d.code
+               AND ds.user_id = ?
         `;
 
-        const params: any[] = [];
+        const params: any[] = [userId, role, userId];
 
-        // se non è admin, filtro per owner
-        if (role !== "admin") {
-            sql += ` WHERE d.owner_id = ?`;
+        if (role !== ROLES.ADMIN) {
+            sql += ` WHERE d.owner_id = ? OR ds.user_id IS NOT NULL`;
             params.push(userId);
         }
 
@@ -61,6 +107,11 @@ export const DeviceController = {
 
     delete(req: any, res: any) {
         const { code } = req.params;
+        const { userId, role } = getCurrentUser(req);
+        if (!canManageSharesOrDelete(userId, role, code)) {
+            return res.status(403).send({ error: "You are not allowed to delete this device" });
+        }
+
         const stmt = DB.prepare("DELETE FROM devices WHERE code = ?");
         const info = stmt.run(code);
 
@@ -73,12 +124,12 @@ export const DeviceController = {
 
     // POST /devices
     create(req: any, res: any) {
-        const { code, device_type_id, owner_id, activated } = req.body;
+        const { code, device_type_id, owner_id, owner_email, activated } = req.body;
 
         if (!code || !device_type_id) {
             return res
                 .status(400)
-                .json({ error: "code e device_type_id sono obbligatori" });
+                .json({ error: "code and device_type_id are required" });
         }
 
         const stmt = DB.prepare(`
@@ -87,10 +138,22 @@ VALUES (?, ?, ?, ?)
 `);
 
         try {
+            let resolvedOwnerId: number | null = owner_id ? Number(owner_id) : null;
+            const normalizedOwnerEmail = normalizeEmail(owner_email || "");
+            if (normalizedOwnerEmail) {
+                const ownerUser = DB.prepare("SELECT id FROM users WHERE email = ?").get(
+                    normalizedOwnerEmail
+                ) as { id: number } | undefined;
+                if (!ownerUser) {
+                    return res.status(400).json({ error: "Owner email not found" });
+                }
+                resolvedOwnerId = ownerUser.id;
+            }
+
             stmt.run(
                 code,
                 device_type_id,
-                owner_id ?? null,
+                resolvedOwnerId,
                 activated ? 1 : 0
             );
 
@@ -101,23 +164,25 @@ VALUES (?, ?)
 `).run(code, "{}");
 
             const created = DB.prepare(`
-SELECT code, device_type_id, owner_id, activated
-FROM devices
-WHERE code = ?
+SELECT d.code, d.device_type_id, d.owner_id, u.email AS owner_email, d.activated
+FROM devices d
+LEFT JOIN users u ON u.id = d.owner_id
+WHERE d.code = ?
 `).get(code);
 
             res.status(201).json(created);
         } catch (e: any) {
             if (e.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || e.code === "SQLITE_CONSTRAINT_UNIQUE") {
-                return res.status(400).json({ error: "code già esistente" });
+                return res.status(400).json({ error: "code already exists" });
             }
             console.error(e);
-            res.status(500).json({ error: "Errore interno" });
+            res.status(500).json({ error: "Internal error" });
         }
     },
     // PUT /devices/:code/properties
     updateProperties(req: any, res: any) {
         const { code } = req.params;
+        const { userId, role } = getCurrentUser(req);
         const { properties } = req.body; // può essere stringa o oggetto
 
         if (!properties) {
@@ -131,7 +196,7 @@ WHERE code = ?
         } catch {
             return res
                 .status(400)
-                .json({ error: "properties non è un JSON valido" });
+                .json({ error: "properties is not valid JSON" });
         }
 
         const device = DB.prepare(
@@ -139,7 +204,10 @@ WHERE code = ?
         ).get(code);
 
         if (!device) {
-            return res.status(400).json({ error: "Device non trovato" });
+            return res.status(400).json({ error: "Device not found" });
+        }
+        if (!canWriteDeviceProperties(userId, role, code)) {
+            return res.status(403).json({ error: "You are not allowed to update this device" });
         }
 
         const existingProps = DB.prepare(
@@ -160,6 +228,196 @@ WHERE code = ?
 
         res.json({ ok: true });
     },
+
+    // GET /devices/:code/shares
+    listShares(req: any, res: any) {
+        const { code } = req.params;
+        const { userId, role } = getCurrentUser(req);
+
+        const canView = role === ROLES.ADMIN || Boolean(
+            DB.prepare(
+                `SELECT 1 FROM devices d
+                 LEFT JOIN device_shares ds ON ds.device_code = d.code AND ds.user_id = ?
+                 WHERE d.code = ? AND (d.owner_id = ? OR ds.user_id IS NOT NULL)
+                 LIMIT 1`
+            ).get(userId, code, userId)
+        );
+        if (!canView) {
+            return res.status(403).send({ error: "You are not allowed to view shares for this device" });
+        }
+
+        const shares = DB.prepare(`
+            SELECT
+                ds.device_code,
+                ds.user_id,
+                ds.can_write,
+                ds.shared_by,
+                ds.created_at,
+                u.email AS user_email,
+                sb.email AS shared_by_email
+            FROM device_shares ds
+            JOIN users u ON u.id = ds.user_id
+            LEFT JOIN users sb ON sb.id = ds.shared_by
+            WHERE ds.device_code = ?
+            ORDER BY ds.created_at DESC
+        `).all(code);
+
+        const invitations = DB.prepare(`
+            SELECT
+                dsi.id,
+                dsi.device_code,
+                dsi.email,
+                dsi.can_write,
+                dsi.invited_by,
+                dsi.expires_at,
+                dsi.accepted_at,
+                dsi.created_at,
+                u.email AS invited_by_email
+            FROM device_share_invitations dsi
+            LEFT JOIN users u ON u.id = dsi.invited_by
+            WHERE dsi.device_code = ?
+              AND dsi.accepted_at IS NULL
+              AND datetime(dsi.expires_at) > datetime('now')
+            ORDER BY dsi.created_at DESC
+        `).all(code);
+
+        return res.send({ shares, invitations });
+    },
+
+    // POST /devices/:code/shares
+    createShare(req: any, res: any) {
+        const { code } = req.params;
+        const { userId, role } = getCurrentUser(req);
+        if (!canManageSharesOrDelete(userId, role, code)) {
+            return res.status(403).send({ error: "Only device owner or admin can share this device" });
+        }
+
+        const { email, canWrite } = req.body as { email?: string; canWrite?: boolean };
+        const normalizedEmail = normalizeEmail(email || "");
+        if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
+            return res.status(400).send({ error: "Invalid email" });
+        }
+
+        const device = DB.prepare("SELECT code, owner_id FROM devices WHERE code = ?").get(code) as
+            | { code: string; owner_id: number | null }
+            | undefined;
+        if (!device) {
+            return res.status(404).send({ error: "Device not found" });
+        }
+
+        const targetUser = DB.prepare("SELECT id, email FROM users WHERE email = ?").get(normalizedEmail) as
+            | { id: number; email: string }
+            | undefined;
+        if (targetUser && targetUser.id === device.owner_id) {
+            return res.status(409).send({ error: "Cannot share with the owner of the device" });
+        }
+
+        const canWriteInt = canWrite ? 1 : 0;
+        if (targetUser) {
+            DB.prepare(`
+                INSERT INTO device_shares (device_code, user_id, can_write, shared_by)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(device_code, user_id) DO UPDATE SET
+                    can_write = excluded.can_write,
+                    shared_by = excluded.shared_by,
+                    created_at = CURRENT_TIMESTAMP
+            `).run(code, targetUser.id, canWriteInt, userId);
+            DB.prepare(`
+                UPDATE device_share_invitations
+                SET accepted_at = COALESCE(accepted_at, CURRENT_TIMESTAMP)
+                WHERE device_code = ? AND email = ? AND accepted_at IS NULL
+            `).run(code, normalizedEmail);
+
+            return res.status(201).send({
+                ok: true,
+                mode: "shared",
+                deviceCode: code,
+                userId: targetUser.id,
+                email: targetUser.email,
+                canWrite: canWriteInt,
+            });
+        }
+
+        const token = crypto.randomBytes(24).toString("hex");
+        const expiresAt = new Date(Date.now() + SHARE_INVITE_TTL_MS).toISOString();
+        const existingInvite = DB.prepare(`
+            SELECT id
+            FROM device_share_invitations
+            WHERE device_code = ?
+              AND email = ?
+              AND accepted_at IS NULL
+            ORDER BY id DESC
+            LIMIT 1
+        `).get(code, normalizedEmail) as { id: number } | undefined;
+
+        if (existingInvite) {
+            DB.prepare(`
+                UPDATE device_share_invitations
+                SET can_write = ?,
+                    invitation_token = ?,
+                    invited_by = ?,
+                    expires_at = ?,
+                    created_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `).run(canWriteInt, token, userId, expiresAt, existingInvite.id);
+        } else {
+            DB.prepare(`
+                INSERT INTO device_share_invitations (
+                    device_code, email, can_write, invitation_token, invited_by, expires_at, accepted_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, NULL)
+            `).run(code, normalizedEmail, canWriteInt, token, userId, expiresAt);
+        }
+
+        return res.status(201).send({
+            ok: true,
+            mode: "invited",
+            deviceCode: code,
+            email: normalizedEmail,
+            canWrite: canWriteInt,
+            expiresAt,
+        });
+    },
+
+    // DELETE /devices/:code/shares/user/:userId
+    removeShare(req: any, res: any) {
+        const { code, userId: targetUserIdRaw } = req.params;
+        const targetUserId = Number(targetUserIdRaw);
+        const { userId, role } = getCurrentUser(req);
+        if (!targetUserId) {
+            return res.status(400).send({ error: "Invalid user id" });
+        }
+        if (!canManageSharesOrDelete(userId, role, code)) {
+            return res.status(403).send({ error: "Only device owner or admin can revoke sharing" });
+        }
+
+        const info = DB.prepare(
+            "DELETE FROM device_shares WHERE device_code = ? AND user_id = ?"
+        ).run(code, targetUserId);
+        if (info.changes === 0) {
+            return res.status(404).send({ error: "Share not found" });
+        }
+        return res.send({ ok: true });
+    },
+
+    // DELETE /devices/:code/shares/invitations/:id
+    revokeShareInvitation(req: any, res: any) {
+        const { code, id } = req.params;
+        const invitationId = Number(id);
+        const { userId, role } = getCurrentUser(req);
+        if (!invitationId) {
+            return res.status(400).send({ error: "Invalid invitation id" });
+        }
+        if (!canManageSharesOrDelete(userId, role, code)) {
+            return res.status(403).send({ error: "Only device owner or admin can revoke invitation" });
+        }
+
+        const info = DB.prepare(
+            "DELETE FROM device_share_invitations WHERE id = ? AND device_code = ? AND accepted_at IS NULL"
+        ).run(invitationId, code);
+        if (info.changes === 0) {
+            return res.status(404).send({ error: "Pending invitation not found" });
+        }
+        return res.send({ ok: true });
+    },
 };
-
-

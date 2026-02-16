@@ -6,6 +6,7 @@ import deviceRoutes from "./routes/deviceRoutes";
 import deviceTypeRoutes from "./routes/deviceTypeRoutes";
 import managementRoutes from "./routes/managementRoute";
 import otaRoutes from "./routes/otaRoutes";
+import mqttRoutes from "./routes/mqttRoutes";
 import "./config/database"; // inizializza DB
 import { JwtPayload } from "jsonwebtoken";
 
@@ -51,5 +52,6 @@ app.use("/manage", bodyParser.json(), managementRoutes);
 app.use("/devices", bodyParser.json(), deviceRoutes);
 app.use("/ota", otaRoutes);
 app.use("/device-types", deviceTypeRoutes);
+app.use("/mqtt", bodyParser.json(), mqttRoutes);
 
 app.listen(3000, () => console.log("Server running on port 3000"));

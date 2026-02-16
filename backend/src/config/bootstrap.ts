@@ -1,6 +1,7 @@
 import { UsersController } from "../controllers/usersController";
 import { DB } from "./database";
 import "dotenv/config";
+import { ROLES } from "@shared/constants/auth";
 
 export async function ensureAdminUser() {
   const email = process.env.ADMIN_EMAIL;
@@ -21,10 +22,9 @@ export async function ensureAdminUser() {
       return;
     }
 
-    UsersController.createUser(String(email), String(password), "admin");
+    UsersController.createUser(String(email), String(password), ROLES.ADMIN);
     console.info("User created");
   } catch (err) {
     console.error("Error creating user:", err);
   }
 }
-

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { apiFetchWithAuth } from "../api/apiClient";
 import { User } from "@shared/types/user";
 import { ROLES, ROLE_VALUES, Role } from "@shared/constants/auth";
+import { MqttPublishAclRule } from "@shared/types/mqtt_publish";
 import "../style/UserManagementPage.css";
 
 interface UserInvitation {
@@ -27,6 +28,12 @@ export default function UsersManagementPage() {
     const [inviteEmail, setInviteEmail] = useState("");
     const [inviteRole, setInviteRole] = useState<Role>(ROLES.USER);
     const [inviteResult, setInviteResult] = useState<InviteResponse | null>(null);
+    const [aclUserId, setAclUserId] = useState<number | null>(null);
+    const [aclRows, setAclRows] = useState<MqttPublishAclRule[]>([]);
+    const [aclLoading, setAclLoading] = useState(false);
+    const [aclTopicPattern, setAclTopicPattern] = useState("");
+    const [aclPermission, setAclPermission] = useState<"allow" | "deny">("allow");
+    const [aclPriority, setAclPriority] = useState("100");
     const url = "/manage/users";
 
     async function loadUsers() {
@@ -46,12 +53,85 @@ export default function UsersManagementPage() {
         }
     }
 
-    async function updateRole(id: number, role: Role) {
+    async function updateUser(id: number, payload: { role?: Role; mqtt_publish_enabled?: boolean }) {
         await apiFetchWithAuth(`${url}/${id}`, {
             method: "PATCH",
-            body: JSON.stringify({ role }),
+            body: JSON.stringify(payload),
         });
-        loadUsers();
+        await loadUsers();
+    }
+
+    async function updateRole(id: number, role: Role) {
+        await updateUser(id, { role });
+    }
+
+    async function updateMqttPublishEnabled(id: number, enabled: boolean) {
+        await updateUser(id, { mqtt_publish_enabled: enabled });
+    }
+
+    async function loadUserAcl(id: number) {
+        try {
+            setAclLoading(true);
+            setError(null);
+            const rows = await apiFetchWithAuth<MqttPublishAclRule[]>(
+                `/manage/users/${id}/mqtt-publish-acl`,
+                { method: "GET" }
+            );
+            setAclRows(rows);
+        } catch (err: any) {
+            setError(err?.error || "Error loading MQTT publish ACL.");
+            setAclRows([]);
+        } finally {
+            setAclLoading(false);
+        }
+    }
+
+    async function openAclManager(id: number) {
+        if (aclUserId === id) {
+            setAclUserId(null);
+            setAclRows([]);
+            return;
+        }
+        setAclUserId(id);
+        setAclTopicPattern("");
+        setAclPermission("allow");
+        setAclPriority("100");
+        await loadUserAcl(id);
+    }
+
+    async function addAclRule() {
+        if (!aclUserId) return;
+        if (!aclTopicPattern.trim()) {
+            setError("Insert an ACL topic pattern.");
+            return;
+        }
+        try {
+            await apiFetchWithAuth(`/manage/users/${aclUserId}/mqtt-publish-acl`, {
+                method: "POST",
+                body: JSON.stringify({
+                    topicPattern: aclTopicPattern.trim(),
+                    permission: aclPermission,
+                    priority: Number(aclPriority) || 100,
+                }),
+            });
+            setAclTopicPattern("");
+            setAclPriority("100");
+            await loadUserAcl(aclUserId);
+        } catch (err: any) {
+            setError(err?.error || "Error saving ACL rule.");
+        }
+    }
+
+    async function deleteAclRule(ruleId: number) {
+        if (!aclUserId) return;
+        try {
+            await apiFetchWithAuth(`/manage/users/${aclUserId}/mqtt-publish-acl/${ruleId}`, {
+                method: "DELETE",
+            });
+            await loadUserAcl(aclUserId);
+        } catch (err: any) {
+            setError(err?.error || "Error deleting ACL rule.");
+        }
     }
 
     async function deleteUser(id: number) {
@@ -224,6 +304,20 @@ export default function UsersManagementPage() {
                                     </option>
                                 ))}
                             </select>
+                            <label className="users-checkbox">
+                                <input
+                                    type="checkbox"
+                                    checked={Boolean(u.mqtt_publish_enabled)}
+                                    onChange={(e) => updateMqttPublishEnabled(u.id, e.target.checked)}
+                                />{" "}
+                                MQTT publish enabled
+                            </label>
+                            <button
+                                className="users-btn users-btn-secondary"
+                                onClick={() => openAclManager(u.id)}
+                            >
+                                MQTT ACL
+                            </button>
 
                             <button
                                 className="users-btn users-btn-danger"
@@ -234,6 +328,68 @@ export default function UsersManagementPage() {
                         </div>
                     </div>
                 ))}
+
+                {aclUserId && (
+                    <div className="users-alert">
+                        <p>
+                            <strong>MQTT publish ACL for user #{aclUserId}</strong>
+                        </p>
+                        <div className="users-invite-grid">
+                            <input
+                                className="users-input"
+                                type="text"
+                                placeholder="topic pattern (e.g. devices/+/commands/#)"
+                                value={aclTopicPattern}
+                                onChange={(e) => setAclTopicPattern(e.target.value)}
+                            />
+                            <select
+                                className="users-select"
+                                value={aclPermission}
+                                onChange={(e) => setAclPermission(e.target.value as "allow" | "deny")}
+                            >
+                                <option value="allow">allow</option>
+                                <option value="deny">deny</option>
+                            </select>
+                            <input
+                                className="users-input"
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={aclPriority}
+                                onChange={(e) => setAclPriority(e.target.value)}
+                                placeholder="priority"
+                            />
+                            <button className="users-btn users-btn-primary" onClick={addAclRule}>
+                                Add ACL
+                            </button>
+                        </div>
+
+                        {aclLoading ? (
+                            <p className="users-empty">Loading ACL...</p>
+                        ) : aclRows.length === 0 ? (
+                            <p className="users-empty">No ACL rules configured.</p>
+                        ) : (
+                            aclRows.map((rule) => (
+                                <div key={rule.id} className="users-row">
+                                    <div className="users-main">
+                                        <div className="users-email">{rule.topic_pattern}</div>
+                                        <div className="users-meta">
+                                            {rule.permission} • priority {rule.priority}
+                                        </div>
+                                    </div>
+                                    <div className="users-actions">
+                                        <button
+                                            className="users-btn users-btn-danger"
+                                            onClick={() => deleteAclRule(rule.id)}
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                )}
             </section>
         </div>
     );

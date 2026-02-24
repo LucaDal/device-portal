@@ -1,9 +1,10 @@
 import { DB } from "../config/database";
 
 export const DeviceTypeController = {
-
     list(req: any, res: any) {
-        const rows = DB.prepare("SELECT id, description, firmware_version, created_at, properties FROM device_types").all();
+        const rows = DB.prepare(
+            "SELECT id, description, firmware_version, created_at, deviceProperties, genericProperties FROM device_types"
+        ).all();
         res.send(rows);
     },
 
@@ -20,25 +21,30 @@ export const DeviceTypeController = {
         }
 
         const stmt = DB.prepare(`
-                INSERT INTO device_types (id, firmware_version, firmware_build, description)
-                VALUES (?, ?, ?, ?)
-            `);
+            INSERT INTO device_types (
+                id,
+                firmware_version,
+                firmware_build,
+                description,
+                deviceProperties,
+                genericProperties
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+        `);
 
-        const info = stmt.run(id, firmware_version, firmware_build, description);
+        stmt.run(id, firmware_version, firmware_build, description, "{}", "{}");
 
-        res.send({
-            id: info.lastInsertRowid,
-            description,
-            firmware_version,
-        });
+        const created = DB.prepare(
+            "SELECT id, description, firmware_version, created_at, deviceProperties, genericProperties FROM device_types WHERE id = ?"
+        ).get(id);
+
+        res.send(created);
     },
 
     // PUT /device-types/:id
     update(req: any, res: any) {
         const { id } = req.params;
 
-        console.info(id);
-        // Limite dimensione file: 10MB
         const MAX_SIZE = 10 * 1024 * 1024;
         if (req.file && req.file.size > MAX_SIZE) {
             return res
@@ -48,7 +54,8 @@ export const DeviceTypeController = {
 
         const { description, firmware_version } = req.body;
         const firmware_build = req.file?.buffer ?? null;
-        const propertiesJson = req.body.properties ?? "{}"; // stringa JSON
+        const devicePropertiesInput = req.body.deviceProperties;
+        const genericPropertiesInput = req.body.genericProperties;
 
         if (!firmware_version?.trim()) {
             return res
@@ -56,21 +63,11 @@ export const DeviceTypeController = {
                 .json({ error: "Missing required fields" });
         }
 
-        // Validazione JSON di properties
-        let properties = "{}";
-        try {
-            JSON.parse(propertiesJson); // solo per validare
-            properties = propertiesJson;
-        } catch {
-            return res
-                .status(400)
-                .json({ error: "properties is not a valid JSON" });
-        }
-
-        // Verifica che il device type esista
         const existing = DB.prepare(
-            "SELECT id FROM device_types WHERE id = ?"
-        ).get(id);
+            "SELECT id, deviceProperties, genericProperties FROM device_types WHERE id = ?"
+        ).get(id) as
+            | { id: string; deviceProperties?: string | null; genericProperties?: string | null }
+            | undefined;
 
         if (!existing) {
             return res
@@ -78,13 +75,41 @@ export const DeviceTypeController = {
                 .json({ error: "Device type not found" });
         }
 
-        // Costruzione dinamica dell'UPDATE
+        let deviceProperties = existing.deviceProperties || "{}";
+        if (typeof devicePropertiesInput !== "undefined") {
+            try {
+                const parsed = typeof devicePropertiesInput === "string"
+                    ? JSON.parse(devicePropertiesInput)
+                    : devicePropertiesInput;
+                deviceProperties = JSON.stringify(parsed ?? {});
+            } catch {
+                return res
+                    .status(400)
+                    .json({ error: "deviceProperties is not a valid JSON" });
+            }
+        }
+
+        let genericProperties = existing.genericProperties || "{}";
+        if (typeof genericPropertiesInput !== "undefined") {
+            try {
+                const parsed = typeof genericPropertiesInput === "string"
+                    ? JSON.parse(genericPropertiesInput)
+                    : genericPropertiesInput;
+                genericProperties = JSON.stringify(parsed ?? {});
+            } catch {
+                return res
+                    .status(400)
+                    .json({ error: "genericProperties is not a valid JSON" });
+            }
+        }
+
         const setClauses: string[] = [
             "description = ?",
             "firmware_version = ?",
-            "properties = ?",
+            "deviceProperties = ?",
+            "genericProperties = ?",
         ];
-        const params: any[] = [description, firmware_version, properties];
+        const params: any[] = [description, firmware_version, deviceProperties, genericProperties];
 
         if (firmware_build) {
             setClauses.push("firmware_build = ?");
@@ -105,7 +130,8 @@ export const DeviceTypeController = {
             `SELECT id,
                 description,
                 firmware_version,
-                properties,
+                deviceProperties,
+                genericProperties,
                 created_at
                 FROM device_types
                 WHERE id = ?`
@@ -113,11 +139,11 @@ export const DeviceTypeController = {
 
         return res.json(updated);
     },
+
     // DELETE /device-types/:id
     delete(req: any, res: any) {
         const { id } = req.params;
 
-        // Block deletion if devices reference this device type to avoid FK errors
         const linked = DB.prepare(
             "SELECT COUNT(*) AS count FROM devices WHERE device_type_id = ?"
         ).get(id) as { count: number };

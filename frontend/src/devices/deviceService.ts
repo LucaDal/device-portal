@@ -5,7 +5,7 @@ import {
     DeviceWithRelations,
 } from "@shared/types/device";
 import { DeviceType } from "@shared/types/device_type";
-import { DeviceCertificateSummary, MqttAclRule } from "@shared/types/mqtt";
+import { MqttAclRule } from "@shared/types/mqtt";
 import { MqttAclAction, MqttAclPermission } from "@shared/constants/mqtt";
 
 const DT_URL = "/device-types";
@@ -128,45 +128,12 @@ export async function deleteMqttAclRule(id: number) {
     });
 }
 
-export async function getDeviceCertificates(): Promise<DeviceCertificateSummary[]> {
-    return apiFetchWithAuth<DeviceCertificateSummary[]>("/mqtt/admin/certificates", {
-        method: "GET",
-    });
-}
-
-export async function upsertDeviceCertificate(payload: {
-    clientId: string;
-    deviceCode: string;
-    certPem: string;
-    enabled?: boolean;
-}) {
-    return apiFetchWithAuth<{
-        ok: boolean;
-        clientId: string;
-        deviceCode: string;
-        certFingerprintSha256: string;
-        enabled: number;
-    }>("/mqtt/admin/certificates", {
-        method: "POST",
-        body: JSON.stringify(payload),
-    });
-}
-
-export async function setDeviceCertificateEnabled(clientId: string, enabled: boolean) {
-    return apiFetchWithAuth<{ ok: boolean; clientId: string; enabled: number }>(
-        `/mqtt/admin/certificates/${encodeURIComponent(clientId)}`,
+export async function revokeDeviceOwnership(payload: { deviceCode: string; ownerEmail: string }) {
+    return apiFetchWithAuth<{ ok: boolean; deviceCode: string; ownerEmail: string }>(
+        "/manage/devices/revoke-ownership",
         {
-            method: "PATCH",
-            body: JSON.stringify({ enabled }),
-        }
-    );
-}
-
-export async function deleteDeviceCertificate(clientId: string) {
-    return apiFetchWithAuth<{ ok: boolean }>(
-        `/mqtt/admin/certificates/${encodeURIComponent(clientId)}`,
-        {
-            method: "DELETE",
+            method: "POST",
+            body: JSON.stringify(payload),
         }
     );
 }

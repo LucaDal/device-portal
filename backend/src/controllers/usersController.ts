@@ -41,13 +41,19 @@ export class UsersController {
     }
 
     static list(req: any, res: any) {
-        if ((req.user as any).role !== ROLES.ADMIN) {
-            return res.status(403).send({ error: "Access denied" });
-        }
         try {
-            const rows = DB.prepare(
-                "SELECT id, email, role, must_change_password, created_at FROM users"
-            ).all();
+            const rows = DB.prepare(`
+                SELECT
+                    u.id,
+                    u.email,
+                    u.role,
+                    u.must_change_password,
+                    u.created_at,
+                    COALESCE(mpp.enabled, 0) AS mqtt_publish_enabled
+                FROM users u
+                LEFT JOIN mqtt_publish_permissions mpp ON mpp.user_id = u.id
+                ORDER BY u.created_at DESC
+            `).all();
             res.send(rows);
         } catch (err) {
             console.info(err);
@@ -56,18 +62,37 @@ export class UsersController {
     }
 
     static update(req: any, res: any) {
-        if ((req.user as any).role !== ROLES.ADMIN) {
-            return res.status(403).send({ error: "Access denied" });
-        }
         try {
             const userId = Number(req.params.id);
-            const { role } = req.body as { role?: Role };
+            const { role, mqtt_publish_enabled } = req.body as {
+                role?: Role;
+                mqtt_publish_enabled?: boolean | number;
+            };
 
-            if (!role || !Object.values(ROLES).includes(role)) {
-                return res.status(400).send({ error: "Invalid role" });
+            if (!userId) {
+                return res.status(400).send({ error: "Invalid user id" });
             }
 
-            DB.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
+            if (typeof role !== "undefined") {
+                if (!Object.values(ROLES).includes(role)) {
+                    return res.status(400).send({ error: "Invalid role" });
+                }
+                DB.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
+            }
+
+            if (typeof mqtt_publish_enabled !== "undefined") {
+                const enabled = mqtt_publish_enabled === true || Number(mqtt_publish_enabled) === 1 ? 1 : 0;
+                const updatedBy = Number((req.user as any)?.id) || null;
+                DB.prepare(`
+                    INSERT INTO mqtt_publish_permissions (user_id, enabled, updated_by, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        enabled = excluded.enabled,
+                        updated_by = excluded.updated_by,
+                        updated_at = CURRENT_TIMESTAMP
+                `).run(userId, enabled, updatedBy);
+            }
+
             return res.send({ ok: true });
         } catch (err) {
             console.info(err);
@@ -76,9 +101,6 @@ export class UsersController {
     }
 
     static delete(req: any, res: any) {
-        if ((req.user as any).role !== ROLES.ADMIN) {
-            return res.status(403).send({ error: "Access denied" });
-        }
         try {
             const userId = Number(req.params.id);
             const requesterId = Number((req.user as any)?.id);
@@ -132,9 +154,6 @@ export class UsersController {
     }
 
     static invite(req: any, res: any) {
-        if ((req.user as any).role !== ROLES.ADMIN) {
-            return res.status(403).send({ error: "Access denied" });
-        }
         try {
             const { email, role } = req.body as { email?: string; role?: Role };
             const normalizedEmail = normalizeEmail(email || "");
@@ -190,9 +209,6 @@ export class UsersController {
     }
 
     static listInvitations(req: any, res: any) {
-        if ((req.user as any).role !== ROLES.ADMIN) {
-            return res.status(403).send({ error: "Access denied" });
-        }
         try {
             const rows = DB.prepare(`
                 SELECT
@@ -216,9 +232,6 @@ export class UsersController {
     }
 
     static revokeInvitation(req: any, res: any) {
-        if ((req.user as any).role !== ROLES.ADMIN) {
-            return res.status(403).send({ error: "Access denied" });
-        }
         try {
             const invitationId = Number(req.params.id);
             if (!invitationId) {
@@ -241,6 +254,83 @@ export class UsersController {
         } catch (err) {
             console.error(err);
             return res.status(500).send({ error: "Failed to revoke invitation" });
+        }
+    }
+
+    static listMqttPublishAcl(req: any, res: any) {
+        try {
+            const userId = Number(req.params.id);
+            if (!userId) {
+                return res.status(400).send({ error: "Invalid user id" });
+            }
+            const rows = DB.prepare(`
+                SELECT id, user_id, topic_pattern, permission, priority, created_at
+                FROM mqtt_publish_acl_rules
+                WHERE user_id = ?
+                ORDER BY priority ASC, id ASC
+            `).all(userId);
+            return res.send(rows);
+        } catch (err) {
+            console.error(err);
+            return res.status(500).send({ error: "Failed to list MQTT publish ACL" });
+        }
+    }
+
+    static upsertMqttPublishAcl(req: any, res: any) {
+        try {
+            const userId = Number(req.params.id);
+            const { id, topicPattern, permission, priority } = req.body as {
+                id?: number;
+                topicPattern?: string;
+                permission?: "allow" | "deny";
+                priority?: number;
+            };
+            if (!userId) {
+                return res.status(400).send({ error: "Invalid user id" });
+            }
+            const normalizedPattern = String(topicPattern || "").trim();
+            if (!normalizedPattern) {
+                return res.status(400).send({ error: "topicPattern is required" });
+            }
+            const normalizedPermission = permission === "deny" ? "deny" : "allow";
+            const normalizedPriority = Number.isFinite(Number(priority)) ? Number(priority) : 100;
+
+            if (id) {
+                const result = DB.prepare(`
+                    UPDATE mqtt_publish_acl_rules
+                    SET topic_pattern = ?, permission = ?, priority = ?
+                    WHERE id = ? AND user_id = ?
+                `).run(normalizedPattern, normalizedPermission, normalizedPriority, id, userId);
+                if (!result.changes) return res.status(404).send({ error: "ACL rule not found" });
+                return res.send({ ok: true, id });
+            }
+
+            const result = DB.prepare(`
+                INSERT INTO mqtt_publish_acl_rules (user_id, topic_pattern, permission, priority)
+                VALUES (?, ?, ?, ?)
+            `).run(userId, normalizedPattern, normalizedPermission, normalizedPriority);
+            return res.status(201).send({ ok: true, id: Number(result.lastInsertRowid) });
+        } catch (err) {
+            console.error(err);
+            return res.status(500).send({ error: "Failed to save MQTT publish ACL" });
+        }
+    }
+
+    static deleteMqttPublishAcl(req: any, res: any) {
+        try {
+            const userId = Number(req.params.id);
+            const aclId = Number(req.params.aclId);
+            if (!userId || !aclId) {
+                return res.status(400).send({ error: "Invalid ids" });
+            }
+            const result = DB.prepare(
+                "DELETE FROM mqtt_publish_acl_rules WHERE id = ? AND user_id = ?"
+            ).run(aclId, userId);
+            if (!result.changes) return res.status(404).send({ error: "ACL rule not found" });
+            return res.send({ ok: true });
+        } catch (err) {
+            console.error(err);
+            return res.status(500).send({ error: "Failed to delete MQTT publish ACL" });
         }
     }
 }

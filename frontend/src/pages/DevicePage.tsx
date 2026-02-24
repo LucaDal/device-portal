@@ -12,10 +12,7 @@ import {
     getMqttAclRules,
     upsertMqttAclRule,
     deleteMqttAclRule,
-    getDeviceCertificates,
-    upsertDeviceCertificate,
-    setDeviceCertificateEnabled,
-    deleteDeviceCertificate,
+    revokeDeviceOwnership,
 } from "../devices/deviceService";
 import { DeviceType } from "@shared/types/device_type";
 import { DeviceShareInvitationRow, DeviceShareRow, DeviceWithRelations } from "@shared/types/device";
@@ -32,10 +29,8 @@ import {
     MqttAclAction,
     MqttAclPermission,
 } from "@shared/constants/mqtt";
-import { DeviceCertificateSummary, MqttAclRule } from "@shared/types/mqtt";
+import { MqttAclRule } from "@shared/types/mqtt";
 import "../style/DevicePage.css";
-
-const PROPERTY_CHAR_LIMIT = 400;
 
 type DevicePropertyRow = PropertyRow & { value: string };
 
@@ -47,7 +42,7 @@ const parseTypeProperties = (raw: unknown): Record<string, PropertyType> => {
             return obj as Record<string, PropertyType>;
         }
     } catch (e) {
-        console.error("Could not parse type_properties", e);
+        console.error("Could not parse type_deviceProperties", e);
     }
     return {};
 };
@@ -66,7 +61,7 @@ const parseDeviceProperties = (raw: unknown): SavedProperties => {
 };
 
 const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => {
-    const typeProps = parseTypeProperties(device.type_properties);
+    const typeProps = parseTypeProperties(device.type_deviceProperties);
     const devProps = parseDeviceProperties(device.device_properties);
 
     return Object.entries(typeProps).map(([key, type]) => {
@@ -79,12 +74,14 @@ const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => 
     });
 };
 
-const calculateTotalPropertyCharacters = (rows: DevicePropertyRow[]): number =>
-    rows.reduce((total, { key, value }) => {
-        const trimmedKey = key.trim();
-        if (!trimmedKey) return total;
-        return total + trimmedKey.length + value.length;
-    }, 0);
+const buildGenericPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => {
+    const genericProps = parseDeviceProperties(device.type_genericProperties);
+    return Object.entries(genericProps).map(([key, saved]) => ({
+        key,
+        type: saved.type,
+        value: String(saved.value),
+    }));
+};
 
 const formatDateTime = (value?: string | null): string => {
     if (!value) return "-";
@@ -130,10 +127,11 @@ const DevicesPage: React.FC = () => {
     const { user } = useAuth();
     const canCreateDevice = user?.role === ROLES.ADMIN;
     const isAdmin = canCreateDevice;
+    const canViewSecurity = isAdmin;
+    const canManageSecurity = isAdmin;
 
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
     const [devices, setDevices] = useState<DeviceWithRelations[]>([]);
-    const [allCertificates, setAllCertificates] = useState<DeviceCertificateSummary[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -145,6 +143,7 @@ const DevicesPage: React.FC = () => {
 
     const [selectedDevice, setSelectedDevice] = useState<DeviceWithRelations | null>(null);
     const [propertyRows, setPropertyRows] = useState<DevicePropertyRow[]>([]);
+    const [genericPropertyRows, setGenericPropertyRows] = useState<DevicePropertyRow[]>([]);
     const [savingProps, setSavingProps] = useState(false);
 
     const [aclRules, setAclRules] = useState<MqttAclRule[]>([]);
@@ -155,12 +154,6 @@ const DevicesPage: React.FC = () => {
     const [aclTopicPattern, setAclTopicPattern] = useState("");
     const [aclPriority, setAclPriority] = useState("100");
 
-    const [certificates, setCertificates] = useState<DeviceCertificateSummary[]>([]);
-    const [certLoading, setCertLoading] = useState(false);
-    const [certSaving, setCertSaving] = useState(false);
-    const [certClientId, setCertClientId] = useState("");
-    const [certPem, setCertPem] = useState("");
-    const [certEnabled, setCertEnabled] = useState(true);
     const [deviceShares, setDeviceShares] = useState<DeviceShareRow[]>([]);
     const [shareInvitations, setShareInvitations] = useState<DeviceShareInvitationRow[]>([]);
     const [sharingLoading, setSharingLoading] = useState(false);
@@ -178,19 +171,12 @@ const DevicesPage: React.FC = () => {
         selectedDevice && (isAdmin || isSelectedDeviceOwner || Number(selectedDevice.can_write) === 1)
     );
 
-    const totalPropertyCharacters = useMemo(
-        () => calculateTotalPropertyCharacters(propertyRows),
-        [propertyRows]
-    );
-    const isOverCharactersLimit = totalPropertyCharacters > PROPERTY_CHAR_LIMIT;
-
     const kpis = useMemo(() => {
         const total = devices.length;
         const active = devices.filter((d) => Boolean(d.activated)).length;
         const owned = devices.filter((d) => !d.is_shared).length;
-        const withCert = new Set(allCertificates.map((c) => c.device_code)).size;
-        return { total, active, owned, withCert, types: deviceTypes.length };
-    }, [devices, allCertificates, deviceTypes]);
+        return { total, active, owned, types: deviceTypes.length };
+    }, [devices, deviceTypes]);
 
     const fetchAll = async () => {
         try {
@@ -199,10 +185,6 @@ const DevicesPage: React.FC = () => {
             const [types, devs] = await Promise.all([getDeviceTypes(), getDevices()]);
             setDeviceTypes(types);
             setDevices(devs);
-            if (isAdmin) {
-                const certs = await getDeviceCertificates();
-                setAllCertificates(certs);
-            }
         } catch (err: any) {
             setError(err?.error || "Unexpected error");
         } finally {
@@ -229,19 +211,6 @@ const DevicesPage: React.FC = () => {
             setError(err?.error || "Error loading MQTT ACL.");
         } finally {
             setAclLoading(false);
-        }
-    };
-
-    const loadCertificatesForDevice = async (deviceCode: string) => {
-        try {
-            setCertLoading(true);
-            const rows = await getDeviceCertificates();
-            setAllCertificates(rows);
-            setCertificates(rows.filter((row) => row.device_code === deviceCode));
-        } catch (err: any) {
-            setError(err?.error || "Error loading MQTT certificates.");
-        } finally {
-            setCertLoading(false);
         }
     };
 
@@ -298,18 +267,17 @@ const DevicesPage: React.FC = () => {
         setSuccessMessage(null);
         setError(null);
         setPropertyRows(buildPropertyRows(device));
+        setGenericPropertyRows(buildGenericPropertyRows(device));
         setShareEmail("");
         setShareCanWrite(false);
 
-        if (isAdmin) {
+        if (canManageSecurity) {
             await Promise.all([
                 loadAclForDevice(device.code),
-                loadCertificatesForDevice(device.code),
                 loadSharesForDevice(device.code),
             ]);
         } else {
             setAclRules([]);
-            setCertificates([]);
             await loadSharesForDevice(device.code);
         }
     };
@@ -327,9 +295,51 @@ const DevicesPage: React.FC = () => {
             if (selectedDevice?.code === device.code) {
                 setSelectedDevice(null);
                 setPropertyRows([]);
+                setGenericPropertyRows([]);
             }
         } catch (err: any) {
             setError(err?.error || "Error while deleting device.");
+        }
+    };
+
+    const handleRevokeOwnership = async (device: DeviceWithRelations) => {
+        if (!isAdmin) return;
+        const ownerEmailInput = window.prompt(
+            `Insert owner email for device "${device.code}":`,
+            device.owner_email || ""
+        );
+        if (ownerEmailInput === null) return;
+
+        const ownerEmail = ownerEmailInput.trim().toLowerCase();
+        const deviceCodeInput = window.prompt(
+            "Insert device code to confirm revoke:",
+            device.code
+        );
+        if (deviceCodeInput === null) return;
+        const deviceCode = deviceCodeInput.trim();
+
+        if (!ownerEmail || !deviceCode) {
+            setError("Owner email and device code are required.");
+            return;
+        }
+
+        if (!window.confirm(`Revoke ownership for "${deviceCode}" from "${ownerEmail}"?`)) {
+            return;
+        }
+
+        setSuccessMessage(null);
+        setError(null);
+        try {
+            await revokeDeviceOwnership({ deviceCode, ownerEmail });
+            setSuccessMessage(`Ownership revoked for device ${deviceCode}.`);
+            await fetchAll();
+            if (selectedDevice?.code === device.code) {
+                setSelectedDevice(null);
+                setPropertyRows([]);
+                setGenericPropertyRows([]);
+            }
+        } catch (err: any) {
+            setError(err?.error || "Error while revoking ownership.");
         }
     };
 
@@ -344,14 +354,6 @@ const DevicesPage: React.FC = () => {
         setSuccessMessage(null);
 
         const propsObj: SavedProperties = {};
-        const totalChars = calculateTotalPropertyCharacters(propertyRows);
-        if (totalChars > PROPERTY_CHAR_LIMIT) {
-            setError(
-                `Maximum limit of ${PROPERTY_CHAR_LIMIT} characters exceeded (current total: ${totalChars}).`
-            );
-            return;
-        }
-
         for (const row of propertyRows) {
             const k = row.key.trim();
             if (!k) continue;
@@ -378,7 +380,7 @@ const DevicesPage: React.FC = () => {
     };
 
     const handleAddAclRule = async () => {
-        if (!selectedDevice || !isAdmin) return;
+        if (!selectedDevice || !canManageSecurity) return;
         if (!aclTopicPattern.trim()) {
             setError("Enter ACL topic pattern.");
             return;
@@ -402,7 +404,7 @@ const DevicesPage: React.FC = () => {
     };
 
     const handleDeleteAclRule = async (id: number) => {
-        if (!selectedDevice || !isAdmin) return;
+        if (!selectedDevice || !canManageSecurity) return;
         try {
             await deleteMqttAclRule(id);
             await loadAclForDevice(selectedDevice.code);
@@ -417,53 +419,6 @@ const DevicesPage: React.FC = () => {
             setSuccessMessage(`Code copied: ${deviceCode}`);
         } catch {
             setError("Could not copy device code to clipboard.");
-        }
-    };
-
-    const handleUpsertCertificate = async () => {
-        if (!selectedDevice || !isAdmin) return;
-        if (!certClientId.trim() || !certPem.trim()) {
-            setError("Enter clientId and PEM certificate.");
-            return;
-        }
-        try {
-            setCertSaving(true);
-            await upsertDeviceCertificate({
-                clientId: certClientId.trim(),
-                deviceCode: selectedDevice.code,
-                certPem: certPem.trim(),
-                enabled: certEnabled,
-            });
-            setSuccessMessage("Certificate assigned to device.");
-            setCertClientId("");
-            setCertPem("");
-            setCertEnabled(true);
-            await loadCertificatesForDevice(selectedDevice.code);
-        } catch (err: any) {
-            setError(err?.error || "Error saving certificate.");
-        } finally {
-            setCertSaving(false);
-        }
-    };
-
-    const handleToggleCertificate = async (clientId: string, enabled: boolean) => {
-        if (!selectedDevice || !isAdmin) return;
-        try {
-            await setDeviceCertificateEnabled(clientId, enabled);
-            await loadCertificatesForDevice(selectedDevice.code);
-        } catch (err: any) {
-            setError(err?.error || "Error updating certificate status.");
-        }
-    };
-
-    const handleDeleteCertificate = async (clientId: string) => {
-        if (!selectedDevice || !isAdmin) return;
-        if (!window.confirm(`Delete certificate for clientId "${clientId}"?`)) return;
-        try {
-            await deleteDeviceCertificate(clientId);
-            await loadCertificatesForDevice(selectedDevice.code);
-        } catch (err: any) {
-            setError(err?.error || "Error deleting certificate.");
         }
     };
 
@@ -537,14 +492,10 @@ const DevicesPage: React.FC = () => {
                     <span className="device-kpi-label">Owned by you</span>
                     <strong className="device-kpi-value">{kpis.owned}</strong>
                 </article>
-                <article className="device-kpi-card">
-                    <span className="device-kpi-label">Device Types</span>
-                    <strong className="device-kpi-value">{kpis.types}</strong>
-                </article>
                 {isAdmin && (
                     <article className="device-kpi-card">
-                        <span className="device-kpi-label">With certificate</span>
-                        <strong className="device-kpi-value">{kpis.withCert}</strong>
+                        <span className="device-kpi-label">Device Types</span>
+                        <strong className="device-kpi-value">{kpis.types}</strong>
                     </article>
                 )}
             </section>
@@ -685,6 +636,15 @@ const DevicesPage: React.FC = () => {
                                                         </button>
                                                         {isAdmin && (
                                                             <button
+                                                                className="dt-btn dt-btn-xs device-table-btn device-table-btn-outline"
+                                                                type="button"
+                                                                onClick={() => handleRevokeOwnership(d)}
+                                                            >
+                                                                Revoke owner
+                                                            </button>
+                                                        )}
+                                                        {isAdmin && (
+                                                            <button
                                                                 className="dt-btn dt-btn-xs device-table-btn device-table-btn-danger"
                                                                 type="button"
                                                                 onClick={() => handleDeleteDevice(d)}
@@ -715,7 +675,7 @@ const DevicesPage: React.FC = () => {
                                     </p>
                                 </div>
 
-                                <div className={isAdmin ? "device-detail-grid" : "device-detail-grid single"}>
+                                <div className={canViewSecurity ? "device-detail-grid" : "device-detail-grid single"}>
                                     <section className="dt-properties-panel dt-card-sub">
                                         <div className="device-subhead">
                                             <h4>Properties</h4>
@@ -745,22 +705,29 @@ const DevicesPage: React.FC = () => {
                                             </div>
                                         )}
 
-                                        <div
-                                            className={
-                                                isOverCharactersLimit ? "dt-alert dt-alert-error" : "dt-small"
-                                            }
-                                        >
-                                            Total characters (key + value):{" "}
-                                            <strong>
-                                                {totalPropertyCharacters}/{PROPERTY_CHAR_LIMIT}
-                                            </strong>
-                                        </div>
+                                        {genericPropertyRows.length > 0 && (
+                                            <>
+                                                <div className="dt-divider" />
+                                                <h5>Generic properties (from Device Type)</h5>
+                                                <div className="dt-props-list compact">
+                                                    {genericPropertyRows.map((row) => (
+                                                        <div key={`generic-${row.key}`} className="dt-prop-row">
+                                                            <div className="dt-prop-key">
+                                                                <strong>{row.key}</strong>
+                                                                <span className="dt-chip">{row.type}</span>
+                                                            </div>
+                                                            <input type="text" value={row.value} disabled />
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </>
+                                        )}
 
                                         <button
                                             type="button"
                                             className="dt-btn dt-btn-primary"
                                             onClick={handleSaveProperties}
-                                            disabled={savingProps || isOverCharactersLimit || !canEditSelectedDevice}
+                                            disabled={savingProps || !canEditSelectedDevice}
                                         >
                                             {savingProps ? "Saving..." : "Save properties"}
                                         </button>
@@ -882,7 +849,7 @@ const DevicesPage: React.FC = () => {
                                         )}
                                     </section>
 
-                                    {isAdmin && (
+                                    {canViewSecurity && (
                                         <section className="dt-properties-panel dt-card-sub">
                                             <h4>Security</h4>
 
@@ -923,6 +890,7 @@ const DevicesPage: React.FC = () => {
                                                     type="text"
                                                     value={aclTopicPattern}
                                                     onChange={(e) => setAclTopicPattern(e.target.value)}
+                                                    disabled={!canManageSecurity}
                                                     placeholder="devices/DEVICE_CODE/telemetry/#"
                                                 />
                                             </div>
@@ -935,6 +903,7 @@ const DevicesPage: React.FC = () => {
                                                         onChange={(e) =>
                                                             setAclAction(e.target.value as MqttAclAction)
                                                         }
+                                                        disabled={!canManageSecurity}
                                                     >
                                                         <option value={MQTT_ACL_ACTIONS.PUBLISH}>publish</option>
                                                         <option value={MQTT_ACL_ACTIONS.SUBSCRIBE}>subscribe</option>
@@ -949,6 +918,7 @@ const DevicesPage: React.FC = () => {
                                                         onChange={(e) =>
                                                             setAclPermission(e.target.value as MqttAclPermission)
                                                         }
+                                                        disabled={!canManageSecurity}
                                                     >
                                                         <option value={MQTT_ACL_PERMISSION.ALLOW}>allow</option>
                                                         <option value={MQTT_ACL_PERMISSION.DENY}>deny</option>
@@ -963,6 +933,7 @@ const DevicesPage: React.FC = () => {
                                                         step={1}
                                                         value={aclPriority}
                                                         onChange={(e) => setAclPriority(e.target.value)}
+                                                        disabled={!canManageSecurity}
                                                         placeholder="100"
                                                     />
                                                 </div>
@@ -971,106 +942,13 @@ const DevicesPage: React.FC = () => {
                                                         type="button"
                                                         className="dt-btn dt-btn-primary"
                                                         onClick={handleAddAclRule}
-                                                        disabled={aclSaving}
+                                                        disabled={aclSaving || !canManageSecurity}
                                                     >
                                                         {aclSaving ? "Saving..." : "Add ACL"}
                                                     </button>
                                                 </div>
                                             </div>
 
-                                            <div className="dt-divider" />
-                                            <h5>MQTT Certificates</h5>
-                                            <p className="dt-small">
-                                                Assign a PEM certificate to the selected device for MQTT mTLS auth.
-                                            </p>
-                                            <div className="dt-props-list compact">
-                                                {certLoading ? (
-                                                    <p className="dt-loading">Loading certificates...</p>
-                                                ) : certificates.length === 0 ? (
-                                                    <p className="dt-empty">No certificate assigned.</p>
-                                                ) : (
-                                                    certificates.map((cert) => (
-                                                        <div key={cert.client_id} className="dt-prop-row">
-                                                            <div className="dt-prop-key">
-                                                                <strong>{cert.client_id}</strong>
-                                                                <span className="dt-chip">
-                                                                    {cert.enabled ? "enabled" : "disabled"}
-                                                                </span>
-                                                                <span className="dt-chip">
-                                                                    {cert.cert_fingerprint_sha256.slice(0, 16)}...
-                                                                </span>
-                                                            </div>
-                                                            <div className="dt-actions">
-                                                                <button
-                                                                    type="button"
-                                                                    className="dt-btn dt-btn-xs dt-btn-outline"
-                                                                    onClick={() =>
-                                                                        handleToggleCertificate(
-                                                                            cert.client_id,
-                                                                            !Boolean(cert.enabled)
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    {cert.enabled ? "Disable" : "Enable"}
-                                                                </button>
-                                                                <button
-                                                                    type="button"
-                                                                    className="dt-btn dt-btn-xs dt-btn-danger"
-                                                                    onClick={() =>
-                                                                        handleDeleteCertificate(cert.client_id)
-                                                                    }
-                                                                >
-                                                                    Delete
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    ))
-                                                )}
-                                            </div>
-
-                                            <div className="dt-form-group">
-                                                <label htmlFor="mqttClientId">Client ID</label>
-                                                <input
-                                                    id="mqttClientId"
-                                                    type="text"
-                                                    value={certClientId}
-                                                    onChange={(e) => setCertClientId(e.target.value)}
-                                                    placeholder={`es. ${selectedDevice.code}-esp32`}
-                                                />
-                                            </div>
-                                            <div className="dt-form-group">
-                                                <label htmlFor="mqttCertPem">Certificate PEM</label>
-                                                <textarea
-                                                    id="mqttCertPem"
-                                                    value={certPem}
-                                                    onChange={(e) => setCertPem(e.target.value)}
-                                                    placeholder="-----BEGIN CERTIFICATE-----"
-                                                    rows={8}
-                                                />
-                                            </div>
-                                            <div className="security-cert-footer">
-                                                <div className="security-cert-meta">
-                                                    <label className="dt-small">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={certEnabled}
-                                                            onChange={(e) => setCertEnabled(e.target.checked)}
-                                                        />{" "}
-                                                        Enabled
-                                                    </label>
-                                                    <span className="dt-small">
-                                                        If disabled, this certificate cannot authenticate MQTT clients.
-                                                    </span>
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    className="dt-btn dt-btn-primary"
-                                                    onClick={handleUpsertCertificate}
-                                                    disabled={certSaving}
-                                                >
-                                                    {certSaving ? "Saving..." : "Assign certificate"}
-                                                </button>
-                                            </div>
                                         </section>
                                     )}
                                 </div>

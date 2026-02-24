@@ -3,5 +3,6 @@ export interface DeviceType {
     description?: string;
     firmware_version: string;
     created_at: string;
-    properties?: string
+    deviceProperties?: string;
+    genericProperties?: string;
 }

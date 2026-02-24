@@ -14,7 +14,7 @@ const Sidebar = () => {
         { to: "/add-device", label: "Add Device", enabled: true },
         { to: "/settings", label: "Settings", enabled: true },
         { to: "/users", label: "Users", enabled: user.role === ROLES.ADMIN },
-        { to: "/device-types", label: "Device Types", enabled: [ROLES.ADMIN, ROLES.DEV].includes(user.role) },
+        { to: "/device-types", label: "Device Types", enabled: user.role === ROLES.ADMIN },
     ];
 
     return (

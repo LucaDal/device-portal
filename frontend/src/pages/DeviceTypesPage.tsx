@@ -1,16 +1,96 @@
 import { useEffect, useRef, useState, FormEvent, ChangeEvent } from "react";
 import { DeviceType } from "@shared/types/device_type";
-import { PropertyRow, PropertyType } from "@shared/types/properties";
+import { PropertyRow, PropertyType, SavedProperties } from "@shared/types/properties";
 import { getDeviceTypes, updateDeviceType } from "../devices/deviceService";
 import "../style/DeviceTypesPage.css";
 
 type FormMode = "create" | "edit";
+type GenericPropertyRow = PropertyRow & { value: string };
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
+const parseDeviceProperties = (raw: unknown): PropertyRow[] => {
+    if (!raw) return [];
+    try {
+        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            return Object.entries(obj).map(([key, value]) => {
+                let type: PropertyType = PropertyType.STRING;
+                const v = String(value);
+
+                if (
+                    v === PropertyType.INT ||
+                    v === PropertyType.FLOAT ||
+                    v === PropertyType.BOOL ||
+                    v === PropertyType.STRING
+                ) {
+                    type = v as PropertyType;
+                }
+
+                return { key, type };
+            });
+        }
+    } catch (e) {
+        console.error("Could not parse deviceProperties", e);
+    }
+    return [];
+};
+
+const parseGenericProperties = (raw: unknown): GenericPropertyRow[] => {
+    if (!raw) return [];
+    try {
+        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            const props = obj as SavedProperties;
+            return Object.entries(props).map(([key, saved]) => ({
+                key,
+                type: saved?.type || PropertyType.STRING,
+                value: typeof saved?.value === "undefined" ? "" : String(saved.value),
+            }));
+        }
+    } catch (e) {
+        console.error("Could not parse genericProperties", e);
+    }
+    return [];
+};
+
+const castValueForType = (
+    row: GenericPropertyRow
+): { ok: true; value: string | number | boolean } | { ok: false; error: string } => {
+    const key = row.key.trim();
+    switch (row.type) {
+        case PropertyType.INT: {
+            const n = parseInt(row.value, 10);
+            if (Number.isNaN(n)) {
+                return { ok: false, error: `Invalid value for "${key}" (int expected).` };
+            }
+            return { ok: true, value: n };
+        }
+        case PropertyType.FLOAT: {
+            const n = parseFloat(row.value);
+            if (Number.isNaN(n)) {
+                return { ok: false, error: `Invalid value for "${key}" (float expected).` };
+            }
+            return { ok: true, value: n };
+        }
+        case PropertyType.BOOL: {
+            const lower = row.value.toLowerCase();
+            if (lower !== "true" && lower !== "false") {
+                return { ok: false, error: `Invalid value for "${key}" (true/false expected).` };
+            }
+            return { ok: true, value: lower === "true" };
+        }
+        case PropertyType.STRING:
+        default:
+            return { ok: true, value: row.value };
+    }
+};
+
 const DeviceTypesPage: React.FC = () => {
     const [propertiesMode, setPropertiesMode] = useState(false);
-    const [properties, setProperties] = useState<PropertyRow[]>([]);
+    const [deviceProperties, setDeviceProperties] = useState<PropertyRow[]>([]);
+    const [genericProperties, setGenericProperties] = useState<GenericPropertyRow[]>([]);
 
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
     const [loading, setLoading] = useState(false);
@@ -28,41 +108,6 @@ const DeviceTypesPage: React.FC = () => {
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const firmwareInputRef = useRef<HTMLInputElement | null>(null);
 
-    // properties nel DB: { key: "string" | "int" | ... }
-    const parseProperties = (raw: unknown): PropertyRow[] => {
-        if (!raw) return [];
-        try {
-            const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-
-            if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-                return Object.entries(obj).map(([key, value]) => {
-                    let type: PropertyType = PropertyType.STRING;
-                    const v = String(value);
-
-                    if (
-                        v === PropertyType.INT ||
-                        v === PropertyType.FLOAT ||
-                        v === PropertyType.BOOL ||
-                        v === PropertyType.STRING
-                    ) {
-                        type = v as PropertyType;
-                    } else {
-                        type = PropertyType.STRING;
-                    }
-
-                    return {
-                        key,
-                        type,
-                    };
-                });
-            }
-        } catch (e) {
-            console.error("Could not parse properties", e);
-        }
-        return [];
-    };
-
-    // Carica lista device types
     const fetchDeviceTypes = async () => {
         try {
             setLoading(true);
@@ -88,26 +133,25 @@ const DeviceTypesPage: React.FC = () => {
         setFormMode("create");
         setSelectedDevice(null);
         setPropertiesMode(false);
-        setProperties([]);
+        setDeviceProperties([]);
+        setGenericProperties([]);
         setError(null);
     };
+
     const validateFirmwareVersion = (value: string): string | null => {
         const trimmed = value.trim();
 
-        // should be only  X.Y.Z
         const match = trimmed.match(/^(\d+)\.(\d+)\.(\d+)$/);
         if (!match) {
             return "Version should be in major minor patch format (ex 1.1.124) ";
         }
 
-        const parts = match.slice(1).map(Number); // [major, minor, patch]
-
-        // ogni parte 0–255
+        const parts = match.slice(1).map(Number);
         if (parts.some((n) => n < 0 || n > 255)) {
             return "every number cannot be major of 255";
         }
 
-        return null; // tutto ok
+        return null;
     };
 
     const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -137,7 +181,6 @@ const DeviceTypesPage: React.FC = () => {
         setError(null);
         setSuccessMessage(null);
 
-
         if (!firmwareVersion.trim() || !typeId.trim()) {
             setError("Compile every field.");
             return;
@@ -148,7 +191,6 @@ const DeviceTypesPage: React.FC = () => {
             setError(fwError);
             return;
         }
-        // In create il file è required
         if (formMode === "create" && !firmwareFile) {
             setError("Select a .bin file (max 10MB).");
             return;
@@ -214,7 +256,6 @@ const DeviceTypesPage: React.FC = () => {
         }
     };
 
-    // PROPERTIES ================
     const handleProperties = (device: DeviceType) => {
         setFormMode("edit");
         setSelectedDevice(device);
@@ -223,36 +264,52 @@ const DeviceTypesPage: React.FC = () => {
         setDescription(device.description || "");
         setFirmwareVersion(device.firmware_version || "");
         setFirmwareFile(null);
-        setProperties(parseProperties(device.properties));
+        setDeviceProperties(parseDeviceProperties(device.deviceProperties));
+        setGenericProperties(parseGenericProperties(device.genericProperties));
         setSuccessMessage(null);
         setError(null);
     };
 
-    const handleAddProperty = () => {
-        setProperties((prev) => [
+    const handleAddDeviceProperty = () => {
+        setDeviceProperties((prev) => [
             ...prev,
             { key: "", type: PropertyType.STRING },
         ]);
     };
 
-    const handlePropertyChange = (index: number, newKey: string) => {
-        setProperties((prev) =>
+    const handleDevicePropertyChange = (index: number, newKey: string) => {
+        setDeviceProperties((prev) =>
             prev.map((p, i) =>
                 i === index ? { ...p, key: newKey } : p
             )
         );
     };
 
-    const handlePropertyTypeChange = (index: number, newType: PropertyType) => {
-        setProperties((prev) =>
+    const handleDevicePropertyTypeChange = (index: number, newType: PropertyType) => {
+        setDeviceProperties((prev) =>
             prev.map((p, i) =>
                 i === index ? { ...p, type: newType } : p
             )
         );
     };
 
-    const handleRemoveProperty = (index: number) => {
-        setProperties((prev) => prev.filter((_, i) => i !== index));
+    const handleRemoveDeviceProperty = (index: number) => {
+        setDeviceProperties((prev) => prev.filter((_, i) => i !== index));
+    };
+
+    const handleAddGenericProperty = () => {
+        setGenericProperties((prev) => [
+            ...prev,
+            { key: "", type: PropertyType.STRING, value: "" },
+        ]);
+    };
+
+    const handleGenericPropertyChange = (index: number, patch: Partial<GenericPropertyRow>) => {
+        setGenericProperties((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+    };
+
+    const handleRemoveGenericProperty = (index: number) => {
+        setGenericProperties((prev) => prev.filter((_, i) => i !== index));
     };
 
     const handlePropertiesSubmit = async (e: FormEvent) => {
@@ -269,20 +326,30 @@ const DeviceTypesPage: React.FC = () => {
             setSubmitting(true);
 
             const formData = new FormData();
+            const devicePropsObj: Record<string, string> = {};
+            const genericPropsObj: SavedProperties = {};
 
-            // nel DB salvi solo il tipo per ogni chiave
-            const propsObj: Record<string, string> = {};
-
-            for (const row of properties) {
+            for (const row of deviceProperties) {
                 const k = row.key.trim();
-                if (!k) continue; // salta righe senza chiave
+                if (!k) continue;
+                devicePropsObj[k] = row.type;
+            }
 
-                propsObj[k] = row.type; // enum -> string
+            for (const row of genericProperties) {
+                const k = row.key.trim();
+                if (!k) continue;
+                const cast = castValueForType(row);
+                if (!cast.ok) {
+                    setError(cast.error);
+                    return;
+                }
+                genericPropsObj[k] = { type: row.type, value: cast.value };
             }
 
             formData.append("description", description);
             formData.append("firmware_version", firmwareVersion);
-            formData.append("properties", JSON.stringify(propsObj));
+            formData.append("deviceProperties", JSON.stringify(devicePropsObj));
+            formData.append("genericProperties", JSON.stringify(genericPropsObj));
 
             await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
 
@@ -306,7 +373,6 @@ const DeviceTypesPage: React.FC = () => {
             </header>
 
             <div className="dt-layout">
-                {/* FORM CARD */}
                 <section className="dt-card dt-form-card">
                     <div className="dt-form-header">
                         <h2>
@@ -341,7 +407,6 @@ const DeviceTypesPage: React.FC = () => {
                     </div>
 
                     {propertiesMode ? (
-                        // === FORM PROPERTIES (solo proprietà) ===
                         <form className="dt-form" onSubmit={handlePropertiesSubmit}>
                             {selectedDevice && (
                                 <div className="dt-form-group">
@@ -355,31 +420,27 @@ const DeviceTypesPage: React.FC = () => {
                             )}
 
                             <div className="dt-form-group">
-                                <label>Properties</label>
+                                <label>Device properties (filled by final user)</label>
 
-                                {properties.length === 0 && (
-                                    <p className="dt-empty">
-                                        No properties. Add one.
-                                    </p>
+                                {deviceProperties.length === 0 && (
+                                    <p className="dt-empty">No properties. Add one.</p>
                                 )}
 
-                                {properties.map((p, index) => (
-                                    <div key={index} className="dt-prop-row">
-                                        {/* KEY */}
+                                {deviceProperties.map((p, index) => (
+                                    <div key={`device-prop-${index}`} className="dt-prop-row">
                                         <input
                                             type="text"
                                             placeholder="Key (es. maxTemp)"
                                             value={p.key}
                                             onChange={(e) =>
-                                                handlePropertyChange(index, e.target.value)
+                                                handleDevicePropertyChange(index, e.target.value)
                                             }
                                         />
 
-                                        {/* TYPE SELECT */}
                                         <select
                                             value={p.type}
                                             onChange={(e) =>
-                                                handlePropertyTypeChange(
+                                                handleDevicePropertyTypeChange(
                                                     index,
                                                     e.target.value as PropertyType
                                                 )
@@ -394,7 +455,7 @@ const DeviceTypesPage: React.FC = () => {
                                         <button
                                             type="button"
                                             className="dt-btn dt-btn-xs dt-btn-danger"
-                                            onClick={() => handleRemoveProperty(index)}
+                                            onClick={() => handleRemoveDeviceProperty(index)}
                                         >
                                             ✕
                                         </button>
@@ -404,9 +465,68 @@ const DeviceTypesPage: React.FC = () => {
                                 <button
                                     type="button"
                                     className="dt-btn dt-btn-outline"
-                                    onClick={handleAddProperty}
+                                    onClick={handleAddDeviceProperty}
                                 >
                                     + Add property
+                                </button>
+                            </div>
+
+                            <div className="dt-divider" />
+
+                            <div className="dt-form-group">
+                                <label>Generic properties (filled by admin, shared by all devices of this type)</label>
+
+                                {genericProperties.length === 0 && (
+                                    <p className="dt-empty">No generic properties. Add one.</p>
+                                )}
+
+                                {genericProperties.map((p, index) => (
+                                    <div key={`generic-prop-${index}`} className="dt-prop-row">
+                                        <input
+                                            type="text"
+                                            placeholder="Key (es. security)"
+                                            value={p.key}
+                                            onChange={(e) =>
+                                                handleGenericPropertyChange(index, { key: e.target.value })
+                                            }
+                                        />
+                                        <select
+                                            value={p.type}
+                                            onChange={(e) =>
+                                                handleGenericPropertyChange(index, {
+                                                    type: e.target.value as PropertyType,
+                                                })
+                                            }
+                                        >
+                                            <option value={PropertyType.STRING}>string</option>
+                                            <option value={PropertyType.INT}>int</option>
+                                            <option value={PropertyType.FLOAT}>float</option>
+                                            <option value={PropertyType.BOOL}>bool</option>
+                                        </select>
+                                        <input
+                                            type="text"
+                                            placeholder={p.type === PropertyType.BOOL ? "true / false" : "Value"}
+                                            value={p.value}
+                                            onChange={(e) =>
+                                                handleGenericPropertyChange(index, { value: e.target.value })
+                                            }
+                                        />
+                                        <button
+                                            type="button"
+                                            className="dt-btn dt-btn-xs dt-btn-danger"
+                                            onClick={() => handleRemoveGenericProperty(index)}
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
+                                ))}
+
+                                <button
+                                    type="button"
+                                    className="dt-btn dt-btn-outline"
+                                    onClick={handleAddGenericProperty}
+                                >
+                                    + Add generic property
                                 </button>
                             </div>
 
@@ -424,7 +544,6 @@ const DeviceTypesPage: React.FC = () => {
                             </button>
                         </form>
                     ) : (
-                        // === FORM FIRMWARE ORIGINALE ===
                         <form className="dt-form" onSubmit={handleSubmit}>
                             <div className="dt-form-group">
                                 <label htmlFor="type-id">Type ID</label>
@@ -510,7 +629,6 @@ const DeviceTypesPage: React.FC = () => {
                     )}
                 </section>
 
-                {/* TABLE CARD */}
                 <section className="dt-card dt-table-card">
                     <div className="dt-table-header">
                         <h2>Device types list</h2>

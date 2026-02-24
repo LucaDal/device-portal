@@ -2,11 +2,12 @@ import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { DeviceController } from "../controllers/deviceController";
 import { OtaController } from "../controllers/otaRequestController";
+import { adminOnly } from "../middleware/adminOnly";
 
 const router = Router();
 
 router.get("/", authMiddleware, DeviceController.list);
-router.post("/", authMiddleware, DeviceController.create);
+router.post("/", authMiddleware, adminOnly, DeviceController.create);
 router.put("/:code/properties", authMiddleware, DeviceController.updateProperties);
 router.get("/:code/shares", authMiddleware, DeviceController.listShares);
 router.post("/:code/shares", authMiddleware, DeviceController.createShare);

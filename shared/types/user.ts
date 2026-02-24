@@ -4,6 +4,7 @@ export interface User {
 	id: number;
 	email: string;
 	role: Role;
+	mqtt_publish_enabled?: number;
 	must_change_password?: number;
 	created_at?: string;
 }

@@ -59,7 +59,8 @@ export const DeviceController = {
                 END AS can_write,
                 dt.description AS device_type_description,
                 dt.firmware_version,
-                dt.properties AS type_properties,
+                dt.deviceProperties AS type_deviceProperties,
+                dt.genericProperties AS type_genericProperties,
                 dp.properties AS device_properties
             FROM devices d
             JOIN device_types dt ON dt.id = d.device_type_id
@@ -119,6 +120,44 @@ export const DeviceController = {
             return res.status(400).send({ message: "No device to delete found" });
         }
         res.send({ ok: true });
+    },
+
+    // POST /manage/devices/revoke-ownership
+    revokeOwnership(req: any, res: any) {
+        const deviceCode = String(req.body?.deviceCode || "").trim();
+        const ownerEmail = normalizeEmail(String(req.body?.ownerEmail || ""));
+
+        if (!deviceCode || !ownerEmail) {
+            return res.status(400).send({ error: "deviceCode and ownerEmail are required" });
+        }
+
+        const owner = DB.prepare("SELECT id FROM users WHERE email = ?").get(ownerEmail) as
+            | { id: number }
+            | undefined;
+        if (!owner) {
+            return res.status(404).send({ error: "Owner user not found" });
+        }
+
+        const device = DB.prepare("SELECT code, owner_id FROM devices WHERE code = ?").get(deviceCode) as
+            | { code: string; owner_id: number | null }
+            | undefined;
+        if (!device) {
+            return res.status(404).send({ error: "Device not found" });
+        }
+        if (!device.owner_id) {
+            return res.status(409).send({ error: "Device is already unassigned" });
+        }
+        if (Number(device.owner_id) !== Number(owner.id)) {
+            return res.status(409).send({ error: "Device owner does not match ownerEmail" });
+        }
+
+        DB.transaction(() => {
+            DB.prepare("UPDATE devices SET owner_id = NULL, activated = 0 WHERE code = ?").run(deviceCode);
+            DB.prepare("DELETE FROM device_shares WHERE device_code = ?").run(deviceCode);
+            DB.prepare("DELETE FROM device_share_invitations WHERE device_code = ?").run(deviceCode);
+        })();
+
+        return res.send({ ok: true, deviceCode, ownerEmail });
     },
 
 
@@ -310,6 +349,33 @@ WHERE d.code = ?
             | undefined;
         if (targetUser && targetUser.id === device.owner_id) {
             return res.status(409).send({ error: "Cannot share with the owner of the device" });
+        }
+
+        if (!targetUser) {
+            const adminInvitation = DB.prepare(`
+                SELECT id, accepted_at, expires_at
+                FROM user_invitations
+                WHERE email = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            `).get(normalizedEmail) as
+                | { id: number; accepted_at: string | null; expires_at: string }
+                | undefined;
+
+            if (!adminInvitation) {
+                return res.status(403).send({
+                    error: "User must be invited by admin before receiving device shares",
+                });
+            }
+
+            if (!adminInvitation.accepted_at) {
+                const expiresAt = new Date(adminInvitation.expires_at).getTime();
+                if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+                    return res.status(403).send({
+                        error: "Admin invitation expired. Ask admin to invite the user again.",
+                    });
+                }
+            }
         }
 
         const canWriteInt = canWrite ? 1 : 0;

@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { X509Certificate } from "crypto";
+import { spawn } from "child_process";
 import { DB } from "../config/database";
 import {
     MQTT_ACL_ACTIONS,
@@ -8,13 +8,7 @@ import {
     MqttAclAction,
 } from "@shared/constants/mqtt";
 import { ROLES } from "@shared/constants/auth";
-
-type DeviceCertificate = {
-    client_id: string;
-    device_code: string;
-    cert_fingerprint_sha256: string;
-    enabled: number;
-};
+import { MqttBrokerSettings, MqttPublishInput } from "@shared/types/mqtt_publish";
 
 type AclRule = {
     action: MqttAclAction;
@@ -23,31 +17,7 @@ type AclRule = {
     priority: number;
 };
 
-function normalizeFingerprint(value: string): string {
-    return value.replace(/:/g, "").trim().toLowerCase();
-}
-
-function decodeMaybePem(value: string): string {
-    const trimmed = value.trim();
-    if (trimmed.includes("-----BEGIN CERTIFICATE-----")) {
-        return trimmed;
-    }
-    try {
-        return decodeURIComponent(trimmed);
-    } catch {
-        return trimmed;
-    }
-}
-
-function getFingerprintFromPem(pem: string): string {
-    try {
-        const cert = new X509Certificate(pem);
-        return normalizeFingerprint(cert.fingerprint256);
-    } catch {
-        // Fallback hash if parser fails; still stable for exact same PEM content.
-        return normalizeFingerprint(crypto.createHash("sha256").update(pem).digest("hex"));
-    }
-}
+const MQTT_SETTINGS_KEY = "mqtt_broker_settings";
 
 function compareSharedSecret(req: any): boolean {
     const configured = process.env.MQTT_HTTP_AUTH_SECRET;
@@ -111,14 +81,6 @@ function deny(res: any, reason?: string) {
     return res.status(200).send({ result: MQTT_AUTH_RESULT.DENY, reason });
 }
 
-function findCertificateByClientId(clientId: string): DeviceCertificate | undefined {
-    return DB.prepare(`
-        SELECT client_id, device_code, cert_fingerprint_sha256, enabled
-        FROM device_certificates
-        WHERE client_id = ?
-    `).get(clientId) as DeviceCertificate | undefined;
-}
-
 function loadAclRules(deviceCode: string): AclRule[] {
     return DB.prepare(`
         SELECT action, topic_pattern, permission, priority
@@ -141,62 +103,152 @@ function checkBuiltInAcl(deviceCode: string, action: MqttAclAction, topic: strin
     return false;
 }
 
-function validateCertificateMatch(payload: any, certificate: DeviceCertificate): boolean {
-    const providedFingerprint = String(
-        payload.cert_fingerprint_sha256 ||
-        payload.cert_fingerprint ||
-        payload.peer_cert_fingerprint ||
-        ""
-    ).trim();
-    const providedPemRaw = String(payload.cert_pem || payload.peer_cert || "").trim();
-
-    let presentedFingerprint = "";
-    if (providedFingerprint) {
-        presentedFingerprint = normalizeFingerprint(providedFingerprint);
-    } else if (providedPemRaw) {
-        const decodedPem = decodeMaybePem(providedPemRaw);
-        presentedFingerprint = getFingerprintFromPem(decodedPem);
-    }
-
-    if (!presentedFingerprint) return false;
-    return normalizeFingerprint(certificate.cert_fingerprint_sha256) === presentedFingerprint;
-}
-
 function canManageDeviceAcl(req: any, deviceCode: string): boolean {
     const role = String((req.user as any)?.role || "");
     if (!deviceCode) return false;
     return role === ROLES.ADMIN;
 }
 
-export const MqttController = {
-    async auth(req: any, res: any) {
+function loadBrokerSettings(): MqttBrokerSettings | null {
+    const row = DB.prepare("SELECT value FROM app_settings WHERE key = ?").get(MQTT_SETTINGS_KEY) as
+        | { value: string | null }
+        | undefined;
+    if (!row?.value) return null;
+    try {
+        const parsed = JSON.parse(row.value) as Partial<MqttBrokerSettings>;
+        const host = String(parsed.host || "").trim();
+        const port = Number(parsed.port);
+        const protocol = parsed.protocol === "mqtts" ? "mqtts" : "mqtt";
+        if (!host || !Number.isFinite(port) || port <= 0 || port > 65535) return null;
+        return {
+            host,
+            port,
+            protocol,
+            username: String(parsed.username || ""),
+            password: String(parsed.password || ""),
+            clientIdPrefix: String(parsed.clientIdPrefix || "device-portal-api"),
+        };
+    } catch {
+        return null;
+    }
+}
+
+function normalizePublishInput(req: any): MqttPublishInput | null {
+    const source = req.method === "GET" ? req.query : req.body;
+    const topic = String(source?.topic || "").trim();
+    const email = String(source?.email || "").trim();
+    const password = String(source?.password || "").trim();
+    const rawContent = source?.content;
+
+    if (!topic || !email || !password || typeof rawContent === "undefined") {
+        return null;
+    }
+
+    let content: any = rawContent;
+    if (typeof rawContent === "string") {
         try {
-            if (!compareSharedSecret(req)) {
-                return deny(res, "invalid shared secret");
-            }
-
-            const payload = req.body || {};
-            const clientId = getClientId(payload);
-            if (!clientId) {
-                return deny(res, "missing client id");
-            }
-
-            const cert = findCertificateByClientId(clientId);
-            if (!cert || !cert.enabled) {
-                return deny(res, "certificate not found or disabled");
-            }
-
-            if (!validateCertificateMatch(payload, cert)) {
-                return deny(res, "certificate mismatch");
-            }
-
-            return allow(res);
-        } catch (err) {
-            console.error("MQTT auth error", err);
-            return deny(res, "server error");
+            content = JSON.parse(rawContent);
+        } catch {
+            return null;
         }
-    },
+    }
 
+    if (!content || typeof content !== "object") {
+        return null;
+    }
+
+    return {
+        topic,
+        email,
+        password,
+        content,
+    };
+}
+
+function canUserPublishTopic(userId: number, role: string, topic: string): boolean {
+    if (!userId || !topic) return false;
+    if (role === ROLES.ADMIN) return true;
+
+    const permission = DB.prepare(
+        "SELECT enabled FROM mqtt_publish_permissions WHERE user_id = ?"
+    ).get(userId) as { enabled: number } | undefined;
+
+    if (!permission || Number(permission.enabled) !== 1) {
+        return false;
+    }
+
+    const rules = DB.prepare(`
+        SELECT topic_pattern, permission
+        FROM mqtt_publish_acl_rules
+        WHERE user_id = ?
+        ORDER BY priority ASC, id ASC
+    `).all(userId) as Array<{ topic_pattern: string; permission: "allow" | "deny" }>;
+
+    for (const rule of rules) {
+        if (!mqttTopicMatches(rule.topic_pattern, topic)) continue;
+        return rule.permission === "allow";
+    }
+    return false;
+}
+
+async function publishMqttMessage(
+    settings: MqttBrokerSettings,
+    topic: string,
+    payload: string
+): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+        const args: string[] = [
+            "-h",
+            settings.host,
+            "-p",
+            String(settings.port),
+            "-t",
+            topic,
+            "-m",
+            payload,
+            "-i",
+            `${settings.clientIdPrefix}-${Date.now()}`,
+        ];
+
+        if (settings.username) {
+            args.push("-u", settings.username);
+        }
+        if (settings.password) {
+            args.push("-P", settings.password);
+        }
+        if (settings.protocol === "mqtts") {
+            args.push("--insecure");
+        }
+
+        const proc = spawn("mosquitto_pub", args);
+        let stderr = "";
+
+        const timer = setTimeout(() => {
+            proc.kill("SIGKILL");
+            reject(new Error("MQTT publish timeout"));
+        }, 12000);
+
+        proc.stderr.on("data", (chunk) => {
+            stderr += String(chunk);
+        });
+
+        proc.on("error", (err: any) => {
+            clearTimeout(timer);
+            if (err?.code === "ENOENT") {
+                return reject(new Error("mosquitto_pub command not found on server"));
+            }
+            return reject(err);
+        });
+
+        proc.on("close", (code) => {
+            clearTimeout(timer);
+            if (code === 0) return resolve();
+            return reject(new Error(stderr.trim() || `mosquitto_pub exited with code ${code}`));
+        });
+    });
+}
+
+export const MqttController = {
     acl(req: any, res: any) {
         try {
             if (!compareSharedSecret(req)) {
@@ -212,12 +264,15 @@ export const MqttController = {
                 return deny(res, "missing acl fields");
             }
 
-            const cert = findCertificateByClientId(clientId);
-            if (!cert || !cert.enabled) {
-                return deny(res, "unknown client");
+            const device = DB.prepare(
+                "SELECT code, activated, COALESCE(mqtt_enabled, 1) AS mqtt_enabled FROM devices WHERE code = ?"
+            ).get(clientId) as { code: string; activated: number; mqtt_enabled: number } | undefined;
+
+            if (!device || !Number(device.activated) || !Number(device.mqtt_enabled)) {
+                return deny(res, "unknown or disabled device");
             }
 
-            const rules = loadAclRules(cert.device_code);
+            const rules = loadAclRules(device.code);
             for (const rule of rules) {
                 if (rule.action !== MQTT_ACL_ACTIONS.ALL && rule.action !== action) {
                     continue;
@@ -230,7 +285,7 @@ export const MqttController = {
                     : deny(res, "rule denied");
             }
 
-            if (checkBuiltInAcl(cert.device_code, action, topic)) {
+            if (checkBuiltInAcl(device.code, action, topic)) {
                 return allow(res);
             }
             return deny(res, "default deny");
@@ -240,143 +295,11 @@ export const MqttController = {
         }
     },
 
-    listCertificates(_req: any, res: any) {
-        try {
-            const rows = DB.prepare(`
-                SELECT
-                    client_id,
-                    device_code,
-                    cert_fingerprint_sha256,
-                    enabled,
-                    created_at,
-                    updated_at,
-                    CASE WHEN secret_hash IS NULL OR secret_hash = '' THEN 0 ELSE 1 END AS has_secret
-                FROM device_certificates
-                ORDER BY updated_at DESC
-            `).all();
-            return res.send(rows);
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to list certificates" });
-        }
-    },
-
-    upsertCertificate(req: any, res: any) {
-        try {
-            const { clientId, deviceCode, certPem, enabled } = req.body as {
-                clientId?: string;
-                deviceCode?: string;
-                certPem?: string;
-                enabled?: boolean;
-            };
-            const normalizedClientId = String(clientId || "").trim();
-            const normalizedDeviceCode = String(deviceCode || "").trim();
-            const normalizedCertPem = String(certPem || "").trim();
-
-            if (!normalizedClientId || !normalizedDeviceCode || !normalizedCertPem) {
-                return res.status(400).send({ error: "clientId, deviceCode and certPem are required" });
-            }
-
-            const device = DB.prepare("SELECT code FROM devices WHERE code = ?").get(normalizedDeviceCode);
-            if (!device) {
-                return res.status(400).send({ error: "Unknown deviceCode" });
-            }
-
-            const fingerprint = getFingerprintFromPem(decodeMaybePem(normalizedCertPem));
-            const enabledValue = enabled === false ? 0 : 1;
-
-            DB.prepare(`
-                INSERT INTO device_certificates (
-                    client_id, device_code, cert_pem, cert_fingerprint_sha256, enabled, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(client_id) DO UPDATE SET
-                    device_code = excluded.device_code,
-                    cert_pem = excluded.cert_pem,
-                    cert_fingerprint_sha256 = excluded.cert_fingerprint_sha256,
-                    enabled = excluded.enabled,
-                    updated_at = CURRENT_TIMESTAMP
-            `).run(
-                normalizedClientId,
-                normalizedDeviceCode,
-                normalizedCertPem,
-                fingerprint,
-                enabledValue
-            );
-
-            return res.status(201).send({
-                ok: true,
-                clientId: normalizedClientId,
-                deviceCode: normalizedDeviceCode,
-                certFingerprintSha256: fingerprint,
-                enabled: enabledValue,
-            });
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to upsert certificate" });
-        }
-    },
-
-    setCertificateEnabled(req: any, res: any) {
-        try {
-            const clientId = String(req.params.clientId || "").trim();
-            const enabled = req.body?.enabled === false ? 0 : 1;
-            if (!clientId) return res.status(400).send({ error: "clientId is required" });
-
-            const result = DB.prepare(
-                "UPDATE device_certificates SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE client_id = ?"
-            ).run(enabled, clientId);
-            if (!result.changes) {
-                return res.status(404).send({ error: "Certificate not found" });
-            }
-            return res.send({ ok: true, clientId, enabled });
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to update certificate status" });
-        }
-    },
-
-    deleteCertificate(req: any, res: any) {
-        try {
-            const clientId = String(req.params.clientId || "").trim();
-            if (!clientId) return res.status(400).send({ error: "clientId is required" });
-
-            const result = DB.prepare("DELETE FROM device_certificates WHERE client_id = ?").run(clientId);
-            if (!result.changes) {
-                return res.status(404).send({ error: "Certificate not found" });
-            }
-            return res.send({ ok: true });
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to delete certificate" });
-        }
-    },
-
     listAclRules(req: any, res: any) {
         try {
             const deviceCode = String(req.params.deviceCode || "").trim();
             if (!deviceCode) return res.status(400).send({ error: "deviceCode is required" });
 
-            const rows = DB.prepare(`
-                SELECT id, device_code, action, topic_pattern, permission, priority, created_at
-                FROM mqtt_acl_rules
-                WHERE device_code = ?
-                ORDER BY priority ASC, id ASC
-            `).all(deviceCode);
-            return res.send(rows);
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to list ACL rules" });
-        }
-    },
-
-    listAclRulesForDevice(req: any, res: any) {
-        try {
-            const deviceCode = String(req.params.code || "").trim();
-            if (!deviceCode) return res.status(400).send({ error: "device code is required" });
-            if (!canManageDeviceAcl(req, deviceCode)) {
-                return res.status(403).send({ error: "Access denied" });
-            }
             const rows = DB.prepare(`
                 SELECT id, device_code, action, topic_pattern, permission, priority, created_at
                 FROM mqtt_acl_rules
@@ -438,20 +361,6 @@ export const MqttController = {
         }
     },
 
-    upsertAclRuleForDevice(req: any, res: any) {
-        try {
-            req.params.deviceCode = req.params.code;
-            const deviceCode = String(req.params.code || "").trim();
-            if (!canManageDeviceAcl(req, deviceCode)) {
-                return res.status(403).send({ error: "Access denied" });
-            }
-            return MqttController.upsertAclRule(req, res);
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to upsert ACL rule" });
-        }
-    },
-
     deleteAclRule(req: any, res: any) {
         try {
             const id = Number(req.params.id);
@@ -468,27 +377,45 @@ export const MqttController = {
         }
     },
 
-    deleteAclRuleForDevice(req: any, res: any) {
+    async publishMessage(req: any, res: any) {
         try {
-            const deviceCode = String(req.params.code || "").trim();
-            if (!deviceCode) return res.status(400).send({ error: "device code is required" });
-            if (!canManageDeviceAcl(req, deviceCode)) {
-                return res.status(403).send({ error: "Access denied" });
+            const input = normalizePublishInput(req);
+            if (!input) {
+                return res.status(400).send({
+                    error: "topic, email, password and JSON content are required",
+                });
+            }
+            const userId = Number((req.user as any)?.id);
+            const role = String((req.user as any)?.role || "");
+            if (!canUserPublishTopic(userId, role, input.topic)) {
+                return res.status(403).send({
+                    error: "Not authorized to publish on this topic",
+                });
             }
 
-            const id = Number(req.params.id);
-            if (!id) return res.status(400).send({ error: "id is required" });
-
-            const result = DB.prepare(
-                "DELETE FROM mqtt_acl_rules WHERE id = ? AND device_code = ?"
-            ).run(id, deviceCode);
-            if (!result.changes) {
-                return res.status(404).send({ error: "ACL rule not found" });
+            const settings = loadBrokerSettings();
+            if (!settings) {
+                return res.status(400).send({
+                    error: "MQTT broker settings not configured. Configure them in Settings.",
+                });
             }
-            return res.send({ ok: true });
+
+            const message = JSON.stringify({
+                email: input.email,
+                password: input.password,
+                content: input.content,
+            });
+
+            await publishMqttMessage(settings, input.topic, message);
+
+            return res.send({
+                ok: true,
+                topic: input.topic,
+                broker: `${settings.protocol}://${settings.host}:${settings.port}`,
+            });
         } catch (err) {
             console.error(err);
-            return res.status(500).send({ error: "Failed to delete ACL rule" });
+            return res.status(500).send({ error: "Failed to publish MQTT message" });
         }
     },
 };

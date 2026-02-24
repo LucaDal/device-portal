@@ -18,7 +18,8 @@ export interface DeviceWithRelations {
 
     device_type_description?: string | null;
     firmware_version?: string;
-    type_properties?: string | Record<string, unknown> | null;
+    type_deviceProperties?: string | Record<string, unknown> | null;
+    type_genericProperties?: string | Record<string, unknown> | null;
     device_properties?: string | Record<string, unknown> | null;
 }
 

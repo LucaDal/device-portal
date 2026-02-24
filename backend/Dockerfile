@@ -33,7 +33,7 @@ COPY --from=builder /app/shared ../shared
 
 # Ensure native modules (e.g., bcrypt) are built for the target arch in the final image
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ \
+  && apt-get install -y --no-install-recommends python3 make g++ mosquitto-clients ca-certificates \
   && npm_config_python=/usr/bin/python3 npm_config_build_from_source=true \
        npm rebuild bcrypt better-sqlite3 --build-from-source \
   && apt-get purge -y python3 make g++ \

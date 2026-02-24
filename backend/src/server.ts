@@ -21,24 +21,39 @@ declare global {
 const app = express();
 
 const ENABLE_REQUEST_LOGS = process.env.ENABLE_REQUEST_LOGS !== "false";
+const ALLOWED_CORS_ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 
-// Minimal CORS handling for frontend → backend calls
+// CORS allowlist: only configured frontend origins are allowed cross-origin.
 app.use((req, res, next) => {
   const origin = req.headers.origin as string | undefined;
-  if (origin) {
-    // Reflect the caller's origin so deployments work on any host/IP without config
+  const originAllowed = origin ? ALLOWED_CORS_ORIGINS.includes(origin) : true;
+
+  if (origin && originAllowed) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Credentials", "true");
   }
-  res.header("Access-Control-Allow-Credentials", "true");
+
   res.header(
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization"
   );
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+
   if (req.method === "OPTIONS") {
+    if (origin && !originAllowed) {
+      return res.sendStatus(403);
+    }
     return res.sendStatus(204);
   }
+
+  if (origin && !originAllowed) {
+    return res.status(403).send({ error: "CORS origin not allowed" });
+  }
+
   next();
 });
 

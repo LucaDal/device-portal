@@ -44,14 +44,22 @@ export const OtaController = {
     getProperties(req: any, res: any) {
         const { dev_code } = req.params
         const data = DB.prepare(
-            "SELECT properties FROM device_properties WHERE device_code = ?"
-        ).get(dev_code);
+            `SELECT
+                dp.properties AS device_properties,
+                dt.genericProperties AS generic_properties
+             FROM devices d
+             LEFT JOIN device_properties dp ON dp.device_code = d.code
+             LEFT JOIN device_types dt ON dt.id = d.device_type_id
+             WHERE d.code = ?`
+        ).get(dev_code) as { device_properties?: string; generic_properties?: string } | undefined;
         if (!data) {
             return res.status(400).json({ error: "Device not found" });
         }
 
-        const savedProps = parseSavedProperties((data as any).properties);
-        const otaProps = mapToOtaProperties(savedProps);
+        const genericProps = parseSavedProperties(data.generic_properties);
+        const savedProps = parseSavedProperties(data.device_properties);
+        const merged = { ...genericProps, ...savedProps };
+        const otaProps = mapToOtaProperties(merged);
         res.json(otaProps);
     },
 

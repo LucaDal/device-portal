@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState } from "react";
 import { User } from "@shared/types/user";
 
 interface AuthContextType {
@@ -10,35 +10,30 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function readAuthFromStorage(): { user: User | null; token: string | null } {
+  if (typeof window === "undefined") {
+    return { user: null, token: null };
+  }
+  const storedUser = localStorage.getItem("user");
+  const storedToken = localStorage.getItem("token");
+  if (!storedUser || storedUser === "undefined" || storedUser === "null" || !storedToken) {
+    return { user: null, token: null };
+  }
+  try {
+    const parsedUser = JSON.parse(storedUser) as User;
+    if (!parsedUser) return { user: null, token: null };
+    return { user: parsedUser, token: storedToken };
+  } catch {
+    localStorage.removeItem("user");
+    localStorage.removeItem("token");
+    return { user: null, token: null };
+  }
+}
+
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-
-
-  useEffect(() => {
-    // Carica user + token da localStorage all'avvio
-    const storedUser = localStorage.getItem("user");
-    const storedToken = localStorage.getItem("token");
-    // controlla che esistano e NON siano "undefined" o "null"
-    if (
-      storedUser &&
-      storedUser !== "undefined" &&
-      storedUser !== "null" &&
-      storedToken
-    ) {
-      try {
-        const parsedUser = JSON.parse(storedUser);
-        if (parsedUser) {
-          setUser(parsedUser);
-          setToken(storedToken);
-        }
-      } catch (e) {
-        console.error("Error parsing user from localStorage:", e);
-        // in caso di errore pulisco per sicurezza
-        localStorage.removeItem("user");
-      }
-    }
-  }, []);
+  const [{ user: initialUser, token: initialToken }] = useState(readAuthFromStorage);
+  const [user, setUser] = useState<User | null>(initialUser);
+  const [token, setToken] = useState<string | null>(initialToken);
 
     const login = (u: User, t: string) => {
         try{

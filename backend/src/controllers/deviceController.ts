@@ -1,6 +1,12 @@
 import { DB } from "../config/database";
 import crypto from "crypto";
 import { ROLES } from "@shared/constants/auth";
+import { SavedProperties } from "@shared/types/properties";
+import {
+    decryptSensitiveDeviceProperties,
+    encryptSensitiveDeviceProperties,
+    parseTypePropertyDefinitions,
+} from "../utils/devicePropertiesSecurity";
 
 const SHARE_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -79,9 +85,29 @@ export const DeviceController = {
         sql += ` ORDER BY d.code ASC`;
 
         const stmt = DB.prepare(sql);
-        const rows = stmt.all(...params);
+        const rows = stmt.all(...params) as Array<any>;
 
-        res.json(rows);
+        const sanitizedRows = rows.map((row) => {
+            if (!row?.device_properties) return row;
+            try {
+                const parsedProps = typeof row.device_properties === "string"
+                    ? JSON.parse(row.device_properties)
+                    : row.device_properties;
+                const decrypted = decryptSensitiveDeviceProperties(parsedProps as SavedProperties);
+                return {
+                    ...row,
+                    device_properties: JSON.stringify(decrypted),
+                };
+            } catch (err) {
+                console.error("Failed to decode device properties for list()", err);
+                return {
+                    ...row,
+                    device_properties: JSON.stringify({}),
+                };
+            }
+        });
+
+        res.json(sanitizedRows);
     },
     // POST /devices/register
     register(req: any, res: any) {
@@ -219,17 +245,20 @@ WHERE d.code = ?
     // PUT /devices/:code/properties
     updateProperties(req: any, res: any) {
         const { code } = req.params;
-        const { userId, role } = getCurrentUser(req);
+        const { userId } = getCurrentUser(req);
         const { properties } = req.body; // può essere stringa o oggetto
 
         if (!properties) {
             return res.status(400).json({ error: "properties mancante" });
         }
 
-        let propertiesJson = "{}";
+        let parsedProperties: SavedProperties = {};
         try {
             const obj = typeof properties === "string" ? JSON.parse(properties) : properties;
-            propertiesJson = JSON.stringify(obj);
+            if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+                return res.status(400).json({ error: "properties is not a valid object" });
+            }
+            parsedProperties = obj as SavedProperties;
         } catch {
             return res
                 .status(400)
@@ -245,6 +274,27 @@ WHERE d.code = ?
         }
         if (!isDeviceOwner(userId, code)) {
             return res.status(403).json({ error: "Only the device owner can update device properties" });
+        }
+
+        const deviceTypeRow = DB.prepare(
+            `SELECT dt.deviceProperties AS device_properties_schema
+             FROM devices d
+             JOIN device_types dt ON dt.id = d.device_type_id
+             WHERE d.code = ?`
+        ).get(code) as { device_properties_schema?: string | null } | undefined;
+        if (!deviceTypeRow) {
+            return res.status(400).json({ error: "Device type not found" });
+        }
+        const schema = parseTypePropertyDefinitions(deviceTypeRow.device_properties_schema);
+
+        let propertiesJson = "{}";
+        try {
+            const encryptedProps = encryptSensitiveDeviceProperties(parsedProperties, schema);
+            propertiesJson = JSON.stringify(encryptedProps);
+        } catch (err: any) {
+            return res.status(500).json({
+                error: err?.message || "Failed to encrypt sensitive device properties",
+            });
         }
 
         const existingProps = DB.prepare(

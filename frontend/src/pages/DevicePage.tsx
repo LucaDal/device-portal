@@ -18,9 +18,11 @@ import { DeviceType } from "@shared/types/device_type";
 import { DeviceShareInvitationRow, DeviceShareRow, DeviceWithRelations } from "@shared/types/device";
 import { useAuth } from "../auth/AuthContext";
 import {
+    DevicePropertyMap,
     PropertyType,
     PropertyRow,
     SavedProperties,
+    parseDevicePropertyMap,
 } from "@shared/types/properties";
 import { ROLES } from "@shared/constants/auth";
 import {
@@ -30,21 +32,22 @@ import {
     MqttAclPermission,
 } from "@shared/constants/mqtt";
 import { MqttAclRule } from "@shared/types/mqtt";
+import ErrorBanner from "../components/ErrorBanner";
 import "../style/DevicePage.css";
 
 type DevicePropertyRow = PropertyRow & { value: string };
 
 const parseTypeProperties = (raw: unknown): Record<string, PropertyType> => {
-    if (!raw) return {};
-    try {
-        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-            return obj as Record<string, PropertyType>;
-        }
-    } catch (e) {
-        console.error("Could not parse type_deviceProperties", e);
+    const map = parseDevicePropertyMap(raw);
+    const out: Record<string, PropertyType> = {};
+    for (const [key, def] of Object.entries(map)) {
+        out[key] = def.type;
     }
-    return {};
+    return out;
+};
+
+const parseTypePropertyDefinitions = (raw: unknown): DevicePropertyMap => {
+    return parseDevicePropertyMap(raw);
 };
 
 const parseDeviceProperties = (raw: unknown): SavedProperties => {
@@ -62,6 +65,7 @@ const parseDeviceProperties = (raw: unknown): SavedProperties => {
 
 const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => {
     const typeProps = parseTypeProperties(device.type_deviceProperties);
+    const typeDefs = parseTypePropertyDefinitions(device.type_deviceProperties);
     const devProps = parseDeviceProperties(device.device_properties);
 
     return Object.entries(typeProps).map(([key, type]) => {
@@ -69,6 +73,7 @@ const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => 
         return {
             key,
             type,
+            sensitive: Boolean(typeDefs[key]?.sensitive),
             value: savedProp ? String(savedProp.value) : "",
         };
     });
@@ -104,7 +109,8 @@ const castValueForType = (
             return { ok: true, value: n };
         }
         case PropertyType.FLOAT: {
-            const n = parseFloat(row.value);
+            const normalized = row.value.replace(",", ".");
+            const n = parseFloat(normalized);
             if (Number.isNaN(n)) {
                 return { ok: false, error: `Invalid value for "${key}" (float expected).` };
             }
@@ -161,7 +167,7 @@ const DevicesPage: React.FC = () => {
     const [shareEmail, setShareEmail] = useState("");
     const [shareCanWrite, setShareCanWrite] = useState(false);
 
-    const [activeTab, setActiveTab] = useState<"create" | "list">("list");
+    const [activeTab, setActiveTab] = useState<"create" | "list" | "properties">("list");
 
     const isSelectedDeviceOwner = Boolean(
         selectedDevice && user && Number(selectedDevice.owner_id) === Number(user.id)
@@ -262,6 +268,7 @@ const DevicesPage: React.FC = () => {
     };
 
     const handleOpenProperties = async (device: DeviceWithRelations) => {
+        setActiveTab("properties");
         setSelectedDevice(device);
         setSuccessMessage(null);
         setError(null);
@@ -279,6 +286,20 @@ const DevicesPage: React.FC = () => {
             setAclRules([]);
             await loadSharesForDevice(device.code);
         }
+    };
+
+    const handleSelectDeviceFromTab = async (code: string) => {
+        if (!code) {
+            setSelectedDevice(null);
+            setPropertyRows([]);
+            setGenericPropertyRows([]);
+            setDeviceShares([]);
+            setShareInvitations([]);
+            return;
+        }
+        const device = devices.find((d) => d.code === code);
+        if (!device) return;
+        await handleOpenProperties(device);
     };
 
     const handleDeleteDevice = async (device: DeviceWithRelations) => {
@@ -499,15 +520,15 @@ const DevicesPage: React.FC = () => {
                 )}
             </section>
 
-            {canCreateDevice && (
-                <div className="dt-tabs">
-                    <button
-                        type="button"
-                        className={`dt-btn ${activeTab === "list" ? "dt-btn-primary" : "dt-btn-outline"}`}
-                        onClick={() => setActiveTab("list")}
-                    >
-                        Device list
-                    </button>
+            <div className="dt-tabs">
+                <button
+                    type="button"
+                    className={`dt-btn ${activeTab === "list" ? "dt-btn-primary" : "dt-btn-outline"}`}
+                    onClick={() => setActiveTab("list")}
+                >
+                    Device list
+                </button>
+                {canCreateDevice && (
                     <button
                         type="button"
                         className={`dt-btn ${activeTab === "create" ? "dt-btn-primary" : "dt-btn-outline"}`}
@@ -515,8 +536,15 @@ const DevicesPage: React.FC = () => {
                     >
                         New device
                     </button>
-                </div>
-            )}
+                )}
+                <button
+                    type="button"
+                    className={`dt-btn ${activeTab === "properties" ? "dt-btn-primary" : "dt-btn-outline"}`}
+                    onClick={() => setActiveTab("properties")}
+                >
+                    Properties
+                </button>
+            </div>
 
             <div className="devices-content">
                 {canCreateDevice && activeTab === "create" && (
@@ -567,6 +595,7 @@ const DevicesPage: React.FC = () => {
                                 <label htmlFor="activated">
                                     <input
                                         id="activated"
+                                        className="dt-check"
                                         type="checkbox"
                                         checked={activated}
                                         onChange={(e) => setActivated(e.target.checked)}
@@ -575,7 +604,6 @@ const DevicesPage: React.FC = () => {
                                 </label>
                             </div>
 
-                            {error && <div className="dt-alert dt-alert-error">{error}</div>}
                             {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
 
                             <button type="submit" className="dt-btn dt-btn-primary">
@@ -585,78 +613,96 @@ const DevicesPage: React.FC = () => {
                     </section>
                 )}
 
-                {activeTab === "list" && (
+                {(activeTab === "list" || activeTab === "properties") && (
                     <section className="dt-card dt-table-card">
                         <div className="dt-table-header">
-                            <h2>Device list</h2>
+                            <h2>{activeTab === "properties" ? "Device properties" : "Device list"}</h2>
                             <button className="dt-btn dt-btn-outline" onClick={fetchAll}>
                                 Refresh
                             </button>
                         </div>
 
-                        {loading ? (
-                            <div className="dt-loading">Loading...</div>
-                        ) : devices.length === 0 ? (
-                            <p className="dt-empty">No devices found.</p>
-                        ) : (
-                            <div className="dt-table-wrapper">
-                                <table className="dt-table device-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Code</th>
-                                            <th>Type</th>
-                                            <th>Owner</th>
-                                            <th>Active</th>
-                                            <th className="device-action-col">Action</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {devices.map((d) => (
-                                            <tr key={d.code}>
-                                                <td>{d.code}</td>
-                                                <td>{d.device_type_description ?? `type ${d.device_type_id}`}</td>
-                                                <td>{d.owner_email ?? (d.owner_id ? `#${d.owner_id}` : "-")}</td>
-                                                <td>{d.activated ? "✔" : "✗"}</td>
-                                                <td className="device-action-col">
-                                                    <div className="dt-actions">
-                                                        <button
-                                                            className="dt-btn dt-btn-xs device-table-btn device-table-btn-primary"
-                                                            type="button"
-                                                            onClick={() => handleOpenProperties(d)}
-                                                        >
-                                                            Properties
-                                                        </button>
-                                                        <button
-                                                            className="dt-btn dt-btn-xs device-table-btn device-table-btn-outline"
-                                                            type="button"
-                                                            onClick={() => handleCopyDeviceCode(d.code)}
-                                                        >
-                                                            Copy code
-                                                        </button>
-                                                        {isAdmin && (
+                        {activeTab === "list" ? (
+                            loading ? (
+                                <div className="dt-loading">Loading...</div>
+                            ) : devices.length === 0 ? (
+                                <p className="dt-empty">No devices found.</p>
+                            ) : (
+                                <div className="dt-table-wrapper">
+                                    <table className="dt-table device-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Code</th>
+                                                <th>Type</th>
+                                                <th>Owner</th>
+                                                <th>Active</th>
+                                                <th className="device-action-col">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {devices.map((d) => (
+                                                <tr key={d.code}>
+                                                    <td>{d.code}</td>
+                                                    <td>{d.device_type_description ?? `type ${d.device_type_id}`}</td>
+                                                    <td>{d.owner_email ?? (d.owner_id ? `#${d.owner_id}` : "-")}</td>
+                                                    <td>{d.activated ? "✔" : "✗"}</td>
+                                                    <td className="device-action-col">
+                                                        <div className="dt-actions">
+                                                            <button
+                                                                className="dt-btn dt-btn-xs device-table-btn device-table-btn-primary"
+                                                                type="button"
+                                                                onClick={() => handleOpenProperties(d)}
+                                                            >
+                                                                Properties
+                                                            </button>
                                                             <button
                                                                 className="dt-btn dt-btn-xs device-table-btn device-table-btn-outline"
                                                                 type="button"
-                                                                onClick={() => handleRevokeOwnership(d)}
+                                                                onClick={() => handleCopyDeviceCode(d.code)}
                                                             >
-                                                                Revoke owner
+                                                                Copy code
                                                             </button>
-                                                        )}
-                                                        {isAdmin && (
-                                                            <button
-                                                                className="dt-btn dt-btn-xs device-table-btn device-table-btn-danger"
-                                                                type="button"
-                                                                onClick={() => handleDeleteDevice(d)}
-                                                            >
-                                                                Delete
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                                            {isAdmin && (
+                                                                <button
+                                                                    className="dt-btn dt-btn-xs device-table-btn device-table-btn-outline"
+                                                                    type="button"
+                                                                    onClick={() => handleRevokeOwnership(d)}
+                                                                >
+                                                                    Revoke owner
+                                                                </button>
+                                                            )}
+                                                            {isAdmin && (
+                                                                <button
+                                                                    className="dt-btn dt-btn-xs device-table-btn device-table-btn-danger"
+                                                                    type="button"
+                                                                    onClick={() => handleDeleteDevice(d)}
+                                                                >
+                                                                    Delete
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )
+                        ) : (
+                            <div className="dt-form-group">
+                                <label htmlFor="selectedDeviceCode">Selected device</label>
+                                <select
+                                    id="selectedDeviceCode"
+                                    value={selectedDevice?.code || ""}
+                                    onChange={(e) => handleSelectDeviceFromTab(e.target.value)}
+                                >
+                                    <option value="">Select...</option>
+                                    {devices.map((d) => (
+                                        <option key={d.code} value={d.code}>
+                                            {d.code} - {d.device_type_description ?? d.device_type_id}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
                         )}
 
@@ -687,13 +733,19 @@ const DevicesPage: React.FC = () => {
                                         ) : propertyRows.length === 0 ? (
                                             <p className="dt-empty">No properties defined in the device type.</p>
                                         ) : (
-                                            <div className="dt-props-list">
+                                            <div className="dt-props-list dt-device-props-list">
+                                                <div className="dt-prop-row dt-device-prop-row dt-device-prop-row-header">
+                                                    <strong>Key</strong>
+                                                    <strong>Type</strong>
+                                                    <strong>Value</strong>
+                                                </div>
                                                 {propertyRows.map((row, index) => (
-                                                    <div key={row.key} className="dt-prop-row">
-                                                        <div className="dt-prop-key">
+                                                    <div key={row.key} className="dt-prop-row dt-device-prop-row">
+                                                        <div className="dt-prop-key dt-device-prop-key-cell">
                                                             <strong>{row.key}</strong>
-                                                            <span className="dt-chip">{row.type}</span>
+                                                            {row.sensitive && <span className="dt-chip">sensitive</span>}
                                                         </div>
+                                                        <span className="dt-chip">{row.type}</span>
                                                         <input
                                                             type="text"
                                                             value={row.value}
@@ -706,24 +758,6 @@ const DevicesPage: React.FC = () => {
                                                     </div>
                                                 ))}
                                             </div>
-                                        )}
-
-                                        {genericPropertyRows.length > 0 && (
-                                            <>
-                                                <div className="dt-divider" />
-                                                <h5>Generic properties (from Device Type)</h5>
-                                                <div className="dt-props-list compact">
-                                                    {genericPropertyRows.map((row) => (
-                                                        <div key={`generic-${row.key}`} className="dt-prop-row">
-                                                            <div className="dt-prop-key">
-                                                                <strong>{row.key}</strong>
-                                                                <span className="dt-chip">{row.type}</span>
-                                                            </div>
-                                                            <input type="text" value={row.value} disabled />
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </>
                                         )}
 
                                         {canViewDeviceProperties && (
@@ -763,6 +797,7 @@ const DevicesPage: React.FC = () => {
                                                         <div className="dt-actions">
                                                             <label className="dt-small">
                                                                 <input
+                                                                    className="dt-check"
                                                                     type="checkbox"
                                                                     checked={shareCanWrite}
                                                                     onChange={(e) => setShareCanWrite(e.target.checked)}
@@ -963,7 +998,7 @@ const DevicesPage: React.FC = () => {
                 )}
             </div>
 
-            {error && <div className="dt-alert dt-alert-error">{error}</div>}
+            <ErrorBanner message={error} />
             {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
         </div>
     );

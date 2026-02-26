@@ -3,6 +3,7 @@ import { apiFetchWithAuth } from "../api/apiClient";
 import { User } from "@shared/types/user";
 import { ROLES, ROLE_VALUES, Role } from "@shared/constants/auth";
 import { MqttPublishAclRule } from "@shared/types/mqtt_publish";
+import ErrorBanner from "../components/ErrorBanner";
 import "../style/UserManagementPage.css";
 
 interface UserInvitation {
@@ -193,7 +194,11 @@ export default function UsersManagementPage() {
                 </p>
             </header>
 
-            {error && <div className="users-alert users-alert-error">{error}</div>}
+            <ErrorBanner
+                message={error}
+
+                inlineClassName="users-alert users-alert-error"
+            />
 
             <section className="users-card">
                 <div className="users-card-head">

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { login as apiLogin } from "../auth/authService";
+import ErrorBanner from "../components/ErrorBanner";
 import "../style/auth.css"
 import { useNavigate } from "react-router-dom";
 
@@ -35,7 +36,11 @@ export default function LoginPage() {
             <div className="auth-card">
                 <h2>Sign in</h2>
 
-                {error && <div className="auth-error">{error}</div>}
+                <ErrorBanner
+                    message={error}
+
+                    inlineClassName="auth-error"
+                />
 
                 <form onSubmit={handleSubmit}>
                     <label>Email</label>

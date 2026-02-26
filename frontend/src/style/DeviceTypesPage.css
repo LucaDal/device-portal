@@ -46,3 +46,85 @@
     font-size: 0.85rem;
     color: #cbd5e1;
 }
+
+.device-types-page .dt-prop-row-inline {
+    grid-template-columns: minmax(0, 2fr) 130px minmax(0, 1fr) auto;
+    align-items: center;
+}
+
+.device-types-page .dt-prop-row-inline-device {
+    grid-template-columns: minmax(0, 1fr) 130px 72px 48px;
+}
+
+.device-types-page .dt-prop-row-inline-generic {
+    grid-template-columns: minmax(0, 1fr) 130px minmax(0, 1fr) 72px;
+}
+
+.device-types-page .dt-prop-row-inline-device > :nth-child(2) {
+    width: 100%;
+}
+
+.device-types-page .dt-prop-row-inline-generic > :nth-child(2),
+.device-types-page .dt-prop-row-inline-generic > :nth-child(3) {
+    width: 100%;
+}
+
+.device-types-page .dt-prop-row-inline-device > :nth-child(3) {
+    align-self: center;
+    justify-self: center;
+}
+
+.device-types-page .dt-prop-row-inline-device > :nth-child(4) {
+    justify-self: end;
+}
+
+.device-types-page .dt-prop-row-inline-generic > :nth-child(4) {
+    justify-self: end;
+}
+
+.device-types-page .dt-prop-row-inline .dt-prop-inline-flag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+}
+
+.device-types-page .dt-prop-row-inline .dt-prop-inline-empty {
+    color: #94a3b8;
+}
+
+.device-types-page .dt-prop-row-header {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #374151;
+    border-radius: 0;
+    padding: 0 0 0.35rem;
+    color: #cbd5e1;
+}
+
+.device-types-page .dt-prop-row-header > :nth-child(3) {
+    justify-self: center;
+}
+
+.device-types-page .dt-prop-row-header > :nth-child(4) {
+    justify-self: end;
+}
+
+.device-types-page .dt-properties-form .dt-prop-row {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(75, 85, 99, 0.45);
+}
+
+.device-types-page .dt-properties-form .dt-prop-row:last-of-type {
+    border-bottom: 1px solid rgba(75, 85, 99, 0.45);
+}
+
+@media (max-width: 900px) {
+    .device-types-page .dt-prop-row-inline {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

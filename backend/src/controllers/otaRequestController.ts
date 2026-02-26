@@ -1,6 +1,7 @@
 import { DB } from "../config/database";
 import crypto from "crypto";
 import { SavedProperties } from "@shared/types/properties";
+import { decryptSensitiveDeviceProperties } from "../utils/devicePropertiesSecurity";
 
 type OtaProperties = Record<string, string | number | boolean>;
 
@@ -43,24 +44,29 @@ export const OtaController = {
 
     getProperties(req: any, res: any) {
         const { dev_code } = req.params
-        const data = DB.prepare(
-            `SELECT
-                dp.properties AS device_properties,
-                dt.genericProperties AS generic_properties
-             FROM devices d
-             LEFT JOIN device_properties dp ON dp.device_code = d.code
-             LEFT JOIN device_types dt ON dt.id = d.device_type_id
-             WHERE d.code = ?`
-        ).get(dev_code) as { device_properties?: string; generic_properties?: string } | undefined;
-        if (!data) {
-            return res.status(400).json({ error: "Device not found" });
-        }
+        try {
+            const data = DB.prepare(
+                `SELECT
+                    dp.properties AS device_properties,
+                    dt.genericProperties AS generic_properties
+                 FROM devices d
+                 LEFT JOIN device_properties dp ON dp.device_code = d.code
+                 LEFT JOIN device_types dt ON dt.id = d.device_type_id
+                 WHERE d.code = ?`
+            ).get(dev_code) as { device_properties?: string; generic_properties?: string } | undefined;
+            if (!data) {
+                return res.status(400).json({ error: "Device not found" });
+            }
 
-        const genericProps = parseSavedProperties(data.generic_properties);
-        const savedProps = parseSavedProperties(data.device_properties);
-        const merged = { ...genericProps, ...savedProps };
-        const otaProps = mapToOtaProperties(merged);
-        res.json(otaProps);
+            const genericProps = parseSavedProperties(data.generic_properties);
+            const savedProps = decryptSensitiveDeviceProperties(parseSavedProperties(data.device_properties));
+            const merged = { ...genericProps, ...savedProps };
+            const otaProps = mapToOtaProperties(merged);
+            res.json(otaProps);
+        } catch (err) {
+            console.error("Error loading OTA properties", err);
+            return res.status(500).json({ error: "Failed to load OTA properties" });
+        }
     },
 
     getBuildFromCode(req: any, res: any) {

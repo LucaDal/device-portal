@@ -51,16 +51,6 @@
     line-height: 1.1;
 }
 
-.dt-tabs {
-    max-width: none;
-    width: 100%;
-    margin: 0 0 1rem;
-    display: flex;
-    gap: 0.5rem;
-    padding-bottom: 0.35rem;
-    border-bottom: 1px solid rgba(71, 85, 105, 0.45);
-}
-
 .devices-content {
     width: 100%;
     max-width: none;
@@ -163,6 +153,29 @@
     width: 100%;
 }
 
+.dt-device-props-list .dt-device-prop-row {
+    grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1fr);
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(75, 85, 99, 0.45);
+    border-radius: 0;
+    padding: 0.4rem 0;
+}
+
+.dt-device-props-list .dt-device-prop-row-header {
+    padding-top: 0;
+    padding-bottom: 0.35rem;
+    color: #cbd5e1;
+}
+
+.dt-device-props-list .dt-device-prop-row .dt-device-prop-key-cell {
+    justify-content: flex-start;
+}
+
+.dt-device-props-list .dt-device-prop-row > :nth-child(2) {
+    justify-self: start;
+}
+
 .device-table-btn {
     border-width: 1px;
 }
@@ -223,57 +236,6 @@
     flex-direction: column;
     gap: 0.3rem;
     max-width: 520px;
-}
-
-.devices-page input[type="checkbox"] {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    min-width: 16px;
-    min-height: 16px;
-    max-width: 16px;
-    max-height: 16px;
-    aspect-ratio: 1 / 1;
-    padding: 0;
-    border: 1px solid #4b5563;
-    border-radius: 4px;
-    background: #1f2937;
-    display: inline-grid;
-    place-content: center;
-    margin: 0;
-    vertical-align: middle;
-    flex: 0 0 16px;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.devices-page input[type="checkbox"]::before {
-    content: "";
-    width: 8px;
-    height: 8px;
-    transform: scale(0);
-    transition: transform 0.12s ease-in-out;
-    clip-path: polygon(14% 44%, 0 59%, 44% 100%, 100% 23%, 84% 9%, 43% 62%);
-    background: #f8fafc;
-}
-
-.devices-page input[type="checkbox"]:checked {
-    background: #3b82f6;
-    border-color: #3b82f6;
-}
-
-.devices-page input[type="checkbox"]:checked::before {
-    transform: scale(1);
-}
-
-.devices-page input[type="checkbox"]:hover {
-    border-color: #60a5fa;
-}
-
-.devices-page input[type="checkbox"]:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.35);
 }
 
 @media (max-width: 700px) {

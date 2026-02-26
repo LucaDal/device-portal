@@ -1,6 +1,7 @@
 import { FormEvent, useState } from "react";
 import { registerDeviceByCode } from "../devices/deviceService";
 import { useAuth } from "../auth/AuthContext";
+import ErrorBanner from "../components/ErrorBanner";
 import "../style/SinglePanelPage.css";
 
 const AddDevicePage: React.FC = () => {
@@ -70,11 +71,7 @@ const AddDevicePage: React.FC = () => {
                                 />
                             </div>
 
-                            {error && (
-                                <div className="dt-alert dt-alert-error">
-                                    {error}
-                                </div>
-                            )}
+                            <ErrorBanner message={error} />
                             {successMessage && (
                                 <div className="dt-alert dt-alert-success">
                                     {successMessage}

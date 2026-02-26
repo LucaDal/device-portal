@@ -1,4 +1,5 @@
 import { DB } from "../config/database";
+import { parseDevicePropertyMap } from "@shared/types/properties";
 
 export const DeviceTypeController = {
     list(req: any, res: any) {
@@ -81,7 +82,7 @@ export const DeviceTypeController = {
                 const parsed = typeof devicePropertiesInput === "string"
                     ? JSON.parse(devicePropertiesInput)
                     : devicePropertiesInput;
-                deviceProperties = JSON.stringify(parsed ?? {});
+                deviceProperties = JSON.stringify(parseDevicePropertyMap(parsed));
             } catch {
                 return res
                     .status(400)

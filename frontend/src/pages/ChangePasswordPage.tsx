@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { changePassword } from "../auth/authService";
 import { useAuth } from "../auth/AuthContext";
+import ErrorBanner from "../components/ErrorBanner";
 import "../style/auth.css";
 
 const ChangePasswordPage: React.FC = () => {
@@ -48,7 +49,11 @@ const ChangePasswordPage: React.FC = () => {
                     {user?.email}
                 </p>
 
-                {error && <div className="auth-error">{error}</div>}
+                <ErrorBanner
+                    message={error}
+
+                    inlineClassName="auth-error"
+                />
                 {ok && <div className="auth-success">{ok}</div>}
 
                 <form onSubmit={handleSubmit}>

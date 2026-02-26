@@ -187,3 +187,27 @@ Generate Basic token example:
 ```bash
 printf '%s' 'device@example.com:my-secret' | base64
 ```
+
+## Retrieve properties by device code
+
+Use the OTA endpoint:
+
+```bash
+curl "http://localhost:3000/ota/<device-code>/properties"
+```
+
+Example:
+
+```bash
+curl "http://localhost:3000/ota/ESP32-001/properties"
+```
+
+Response format (generic):
+
+```json
+{
+  "propertyA": "value",
+  "propertyB": 123,
+  "propertyC": true
+}
+```

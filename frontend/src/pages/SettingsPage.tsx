@@ -4,6 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { apiFetchWithAuth } from "../api/apiClient";
 import { ROLES } from "@shared/constants/auth";
 import { MqttBrokerSettings } from "@shared/types/mqtt_publish";
+import ErrorBanner from "../components/ErrorBanner";
 import "../style/SinglePanelPage.css";
 
 const SettingsPage: React.FC = () => {
@@ -101,7 +102,7 @@ const SettingsPage: React.FC = () => {
 
             <section className="dt-card single-page-card">
                 <h2>Change password</h2>
-                {error && <div className="dt-alert dt-alert-error">{error}</div>}
+                <ErrorBanner message={error} />
                 {success && <div className="dt-alert dt-alert-success">{success}</div>}
 
                 <form className="dt-form" onSubmit={handleSubmit}>

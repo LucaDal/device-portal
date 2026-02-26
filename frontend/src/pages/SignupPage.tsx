@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { signup as apiSignup, login as apiLogin} from "../auth/authService";
+import ErrorBanner from "../components/ErrorBanner";
 import "../style/auth.css"
 import { ROLES, Role } from "@shared/constants/auth";
 
@@ -53,9 +54,11 @@ export default function SignupPage() {
             <div className="auth-card" role="region" aria-labelledby="signup-title">
                 <h2 id="signup-title" className="auth-title">Sign up</h2>
 
-                {error && (
-                    <div className="auth-error" role="alert" aria-live="assertive">{error}</div>
-                )}
+                <ErrorBanner
+                    message={error}
+
+                    inlineClassName="auth-error"
+                />
 
                 <form onSubmit={handleSubmit} className="auth-form" noValidate>
                     <div className={`auth-field ${email ? (emailValid ? "valid" : "invalid") : ""}`}>

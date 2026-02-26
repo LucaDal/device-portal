@@ -158,21 +158,23 @@ Notes:
 ## MQTT publish API
 The backend exposes a publish endpoint:
 - `POST /mqtt/publish`
-- `GET /mqtt/publish`
 
 Requirements:
-- Authenticated user (`Authorization: Bearer <token>`).
+- HTTPS in production.
+- `Authorization: Basic <base64(email:password)>`.
 - MQTT broker settings configured from Dashboard `Settings` (admin only).
 - User enabled by admin for MQTT publish and allowed by user ACL topic rules.
 
+Security recommendation:
+- Do not send credentials in query parameters.
+- Use only `POST /mqtt/publish`.
+
 ### POST example
 ```bash
-curl -X POST "http://localhost:3000/mqtt/publish" \
-  -H "Authorization: Bearer <JWT_TOKEN>" \
+curl -X POST "https://localhost:3000/mqtt/publish" \
+  -H "Authorization: Basic <BASE64_EMAIL_PASSWORD>" \
   -H "Content-Type: application/json" \
   -d '{
-    "email": "device@example.com",
-    "password": "my-secret",
     "topic": "devices/ESP32-001/commands",
     "content": {
       "action": "reboot",
@@ -181,18 +183,7 @@ curl -X POST "http://localhost:3000/mqtt/publish" \
   }'
 ```
 
-### GET example with query parameters
-`content` must be valid JSON (URL-encoded).
+Generate Basic token example:
 ```bash
-curl -G "http://localhost:3000/mqtt/publish" \
-  -H "Authorization: Bearer <JWT_TOKEN>" \
-  --data-urlencode "email=device@example.com" \
-  --data-urlencode "password=my-secret" \
-  --data-urlencode "topic=devices/ESP32-001/commands" \
-  --data-urlencode "content={\"action\":\"reboot\",\"delaySec\":3}"
-```
-
-Example URL format:
-```text
-http://localhost:3000/mqtt/publish?email=device@example.com&password=my-secret&topic=devices/ESP32-001/commands&content=%7B%22action%22%3A%22reboot%22%2C%22delaySec%22%3A3%7D
+printf '%s' 'device@example.com:my-secret' | base64
 ```

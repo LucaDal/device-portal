@@ -166,10 +166,9 @@ const DevicesPage: React.FC = () => {
     const isSelectedDeviceOwner = Boolean(
         selectedDevice && user && Number(selectedDevice.owner_id) === Number(user.id)
     );
+    const canViewDeviceProperties = isSelectedDeviceOwner;
     const canManageSharing = Boolean(selectedDevice && (isAdmin || isSelectedDeviceOwner));
-    const canEditSelectedDevice = Boolean(
-        selectedDevice && (isAdmin || isSelectedDeviceOwner || Number(selectedDevice.can_write) === 1)
-    );
+    const canEditSelectedDevice = canViewDeviceProperties;
 
     const kpis = useMemo(() => {
         const total = devices.length;
@@ -681,7 +680,11 @@ const DevicesPage: React.FC = () => {
                                             <h4>Properties</h4>
                                         </div>
 
-                                        {propertyRows.length === 0 ? (
+                                        {!canViewDeviceProperties ? (
+                                            <p className="dt-empty">
+                                                Device properties are visible only to the device owner.
+                                            </p>
+                                        ) : propertyRows.length === 0 ? (
                                             <p className="dt-empty">No properties defined in the device type.</p>
                                         ) : (
                                             <div className="dt-props-list">
@@ -723,14 +726,16 @@ const DevicesPage: React.FC = () => {
                                             </>
                                         )}
 
-                                        <button
-                                            type="button"
-                                            className="dt-btn dt-btn-primary"
-                                            onClick={handleSaveProperties}
-                                            disabled={savingProps || !canEditSelectedDevice}
-                                        >
-                                            {savingProps ? "Saving..." : "Save properties"}
-                                        </button>
+                                        {canViewDeviceProperties && (
+                                            <button
+                                                type="button"
+                                                className="dt-btn dt-btn-primary"
+                                                onClick={handleSaveProperties}
+                                                disabled={savingProps || !canEditSelectedDevice}
+                                            >
+                                                {savingProps ? "Saving..." : "Save properties"}
+                                            </button>
+                                        )}
 
                                         <div className="dt-divider" />
                                         <h5>Sharing</h5>

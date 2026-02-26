@@ -11,7 +11,6 @@ router.post("/acl", MqttController.acl);
 router.get("/admin/acl/:deviceCode", authMiddleware, adminOnly, MqttController.listAclRules);
 router.post("/admin/acl/:deviceCode", authMiddleware, adminOnly, MqttController.upsertAclRule);
 router.delete("/admin/acl/rules/:id", authMiddleware, adminOnly, MqttController.deleteAclRule);
-router.post("/publish", authMiddleware, MqttController.publishMessage);
-router.get("/publish", authMiddleware, MqttController.publishMessage);
+router.post("/publish", MqttController.publishMessage);
 
 export default router;

@@ -27,17 +27,12 @@ function canManageSharesOrDelete(userId: number, role: string, deviceCode: strin
     return Boolean(owned);
 }
 
-function canWriteDeviceProperties(userId: number, role: string, deviceCode: string): boolean {
-    if (role === ROLES.ADMIN) return true;
+function isDeviceOwner(userId: number, deviceCode: string): boolean {
     const owned = DB.prepare("SELECT 1 FROM devices WHERE code = ? AND owner_id = ? LIMIT 1").get(
         deviceCode,
         userId
     );
-    if (owned) return true;
-    const sharedWrite = DB.prepare(
-        "SELECT 1 FROM device_shares WHERE device_code = ? AND user_id = ? AND can_write = 1 LIMIT 1"
-    ).get(deviceCode, userId);
-    return Boolean(sharedWrite);
+    return Boolean(owned);
 }
 
 export const DeviceController = {
@@ -61,7 +56,10 @@ export const DeviceController = {
                 dt.firmware_version,
                 dt.deviceProperties AS type_deviceProperties,
                 dt.genericProperties AS type_genericProperties,
-                dp.properties AS device_properties
+                CASE
+                    WHEN d.owner_id = ? THEN dp.properties
+                    ELSE NULL
+                END AS device_properties
             FROM devices d
             JOIN device_types dt ON dt.id = d.device_type_id
             LEFT JOIN users ou ON ou.id = d.owner_id
@@ -71,7 +69,7 @@ export const DeviceController = {
                AND ds.user_id = ?
         `;
 
-        const params: any[] = [userId, role, userId];
+        const params: any[] = [userId, role, userId, userId];
 
         if (role !== ROLES.ADMIN) {
             sql += ` WHERE d.owner_id = ? OR ds.user_id IS NOT NULL`;
@@ -245,8 +243,8 @@ WHERE d.code = ?
         if (!device) {
             return res.status(400).json({ error: "Device not found" });
         }
-        if (!canWriteDeviceProperties(userId, role, code)) {
-            return res.status(403).json({ error: "You are not allowed to update this device" });
+        if (!isDeviceOwner(userId, code)) {
+            return res.status(403).json({ error: "Only the device owner can update device properties" });
         }
 
         const existingProps = DB.prepare(

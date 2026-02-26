@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { spawn } from "child_process";
+import bcrypt from "bcrypt";
 import { DB } from "../config/database";
 import {
     MQTT_ACL_ACTIONS,
@@ -9,6 +10,7 @@ import {
 } from "@shared/constants/mqtt";
 import { ROLES } from "@shared/constants/auth";
 import { MqttBrokerSettings, MqttPublishInput } from "@shared/types/mqtt_publish";
+import { UserWithPassword } from "@shared/types/user";
 
 type AclRule = {
     action: MqttAclAction;
@@ -134,13 +136,11 @@ function loadBrokerSettings(): MqttBrokerSettings | null {
 }
 
 function normalizePublishInput(req: any): MqttPublishInput | null {
-    const source = req.method === "GET" ? req.query : req.body;
+    const source = req.body;
     const topic = String(source?.topic || "").trim();
-    const email = String(source?.email || "").trim();
-    const password = String(source?.password || "").trim();
     const rawContent = source?.content;
 
-    if (!topic || !email || !password || typeof rawContent === "undefined") {
+    if (!topic || typeof rawContent === "undefined") {
         return null;
     }
 
@@ -159,8 +159,6 @@ function normalizePublishInput(req: any): MqttPublishInput | null {
 
     return {
         topic,
-        email,
-        password,
         content,
     };
 }
@@ -189,6 +187,40 @@ function canUserPublishTopic(userId: number, role: string, topic: string): boole
         return rule.permission === "allow";
     }
     return false;
+}
+
+function parseBasicAuthCredentials(req: any): { email: string; password: string } | null {
+    const header = String(req.headers?.authorization || "");
+    if (!header.startsWith("Basic ")) return null;
+    const encoded = header.slice(6).trim();
+    if (!encoded) return null;
+
+    let decoded = "";
+    try {
+        decoded = Buffer.from(encoded, "base64").toString("utf8");
+    } catch {
+        return null;
+    }
+
+    const separatorIndex = decoded.indexOf(":");
+    if (separatorIndex <= 0) return null;
+
+    const email = decoded.slice(0, separatorIndex).trim().toLowerCase();
+    const password = decoded.slice(separatorIndex + 1);
+    if (!email || !password) return null;
+    return { email, password };
+}
+
+async function authenticatePublishUser(email: string, password: string): Promise<UserWithPassword | null> {
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    if (!normalizedEmail || !password) return null;
+    const row = DB.prepare(
+        "SELECT id, email, role, password_hash, must_change_password FROM users WHERE email = ?"
+    ).get(normalizedEmail) as UserWithPassword | undefined;
+    if (!row) return null;
+    const ok = await bcrypt.compare(password, row.password_hash);
+    if (!ok) return null;
+    return row;
 }
 
 async function publishMqttMessage(
@@ -382,11 +414,24 @@ export const MqttController = {
             const input = normalizePublishInput(req);
             if (!input) {
                 return res.status(400).send({
-                    error: "topic, email, password and JSON content are required",
+                    error: "topic and JSON content are required",
                 });
             }
-            const userId = Number((req.user as any)?.id);
-            const role = String((req.user as any)?.role || "");
+
+            const credentials = parseBasicAuthCredentials(req);
+            if (!credentials) {
+                return res.status(401).send({
+                    error: "Missing or invalid Authorization header. Use Basic authentication.",
+                });
+            }
+
+            const authUser = await authenticatePublishUser(credentials.email, credentials.password);
+            if (!authUser) {
+                return res.status(401).send({ error: "Invalid email or password" });
+            }
+
+            const userId = Number(authUser.id);
+            const role = String(authUser.role || "");
             if (!canUserPublishTopic(userId, role, input.topic)) {
                 return res.status(403).send({
                     error: "Not authorized to publish on this topic",
@@ -401,8 +446,7 @@ export const MqttController = {
             }
 
             const message = JSON.stringify({
-                email: input.email,
-                password: input.password,
+                email: authUser.email,
                 content: input.content,
             });
 

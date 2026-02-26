@@ -11,8 +11,6 @@ export interface MqttBrokerSettings {
 
 export interface MqttPublishInput {
     topic: string;
-    email: string;
-    password: string;
     content: Record<string, unknown> | unknown[];
 }
 

@@ -123,11 +123,11 @@ export const DeviceController = {
         }
 
         const owned = DB.prepare("SELECT * FROM devices WHERE code = ? AND activated = 1").get(code);
-        if(owned){
-            return res.status(400).json({ message: "Device already activated"});
+        if (owned) {
+            return res.status(400).json({ message: "Device already activated" });
         }
         DB.prepare(`UPDATE devices SET owner_id = ?, activated = 1 WHERE code = ?`).run(userId, code);
-        res.json({ok : true});
+        res.json({ ok: true });
     },
 
     delete(req: any, res: any) {

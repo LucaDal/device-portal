@@ -3,7 +3,7 @@
 Quick setup notes for environment variables and the Nginx reverse proxy.
 
 ## Environment variables (.env)
-Create a `.env` in the project root. Suggested template:
+Create a `.env` in the project root. Suggested template (or in backend folder while developing):
 ```
 # Admin created at first boot only
 ADMIN_EMAIL=admin@example.com
@@ -11,6 +11,10 @@ ADMIN_PASSWORD=admin
 
 # JWT signing secret: use a long random value
 JWT_SECRET=change-me-please
+
+# Encryption key for sensitive device properties (string fields with sensitive=true)
+# Use 64 hex chars (32 bytes) or base64 for 32 raw bytes
+DEVICE_PROPERTIES_ENCRYPTION_KEY=change-me
 
 # Backend CORS allowlist (comma-separated).
 # With the current docker-compose defaults, localhost:5173 is already used if this is omitted.
@@ -37,6 +41,7 @@ Notes:
 - CORS is allowlist-based via `CORS_ALLOWED_ORIGINS`.
 - In the current `docker-compose.yml`, API defaults to `CORS_ALLOWED_ORIGINS=http://localhost:5173`, so local setup works without extra changes.
 - `ENABLE_REQUEST_LOGS=false` keeps logs to explicit app messages only.
+- `DEVICE_PROPERTIES_ENCRYPTION_KEY` is required if you enable sensitive encrypted device properties.
 
 ## Running with Docker Compose
 - Local build: `docker compose build` then `docker compose up -d`.

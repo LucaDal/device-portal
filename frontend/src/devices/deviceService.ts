@@ -1,5 +1,6 @@
 import { apiFetch, apiFetchFD, apiFetchWithAuth } from "../api/apiClient";
 import {
+    DeviceProvisioningResult,
     DeviceShareInvitationRow,
     DeviceShareRow,
     DeviceWithRelations,
@@ -32,7 +33,7 @@ export async function createDevice(payload: {
     owner_email?: string;
     activated?: boolean;
 }) {
-    return apiFetchWithAuth<DeviceWithRelations>("/devices", {
+    return apiFetchWithAuth<DeviceProvisioningResult>("/devices", {
         method: "POST",
         body: JSON.stringify(payload),
     });
@@ -135,5 +136,12 @@ export async function revokeDeviceOwnership(payload: { deviceCode: string; owner
             method: "POST",
             body: JSON.stringify(payload),
         }
+    );
+}
+
+export async function regenerateDeviceOtaSecret(code: string) {
+    return apiFetchWithAuth<{ ok: boolean; code: string; ota_secret: string }>(
+        `/devices/${encodeURIComponent(code)}/ota-secret/regenerate`,
+        { method: "POST" }
     );
 }

@@ -43,7 +43,7 @@ function respondToBuildReq(data: any, res: any) {
 export const OtaController = {
 
     getProperties(req: any, res: any) {
-        const { dev_code } = req.params
+        const dev_code = String(req.otaAuth?.deviceCode || "");
         try {
             const data = DB.prepare(
                 `SELECT
@@ -70,14 +70,15 @@ export const OtaController = {
     },
 
     getBuildFromCode(req: any, res: any) {
-        const { dev_code } = req.params
+        const deviceTypeId = String(req.otaAuth?.deviceTypeId || "");
+        const deviceCode = String(req.otaAuth?.deviceCode || "");
         const row = DB.prepare(
-            `SELECT firmware_build fb, firmware_version fv FROM devices d
-                JOIN device_types dt ON d.device_type_id = dt.id
-                WHERE d.code = ?`
-        ).get(dev_code);
+            `SELECT firmware_build fb, firmware_version fv
+             FROM device_types
+             WHERE id = ?`
+        ).get(deviceTypeId);
         if (!row) {
-            return res.status(400).json({ error: "Device not found" });
+            return res.status(400).json({ error: "Device type not found" });
         }
         let device = "unknown";
         let version = "unknown";
@@ -95,7 +96,9 @@ export const OtaController = {
             device = `x-esp32[${esp32Mac || "no-mac"}]`;
             version = esp32Version;
         }
-        console.info(`client [${device}] - device [${dev_code}] - [${version} -> ${(row as any).fv}]`);
+        console.info(
+            `client [${device}] - device [${deviceCode}] - type [${deviceTypeId}] - [${version} -> ${(row as any).fv}]`
+        );
 
         const fileBuffer: Buffer = (row as any).fb;
         const md5Checksum = crypto.createHash("md5")
@@ -107,8 +110,8 @@ export const OtaController = {
         );
         return res.send(fileBuffer);
     },
-    getBuildInfoFromDeviceTypeId(req: any, res: any){
-        const { device_type_id } = req.params
+    getBuildInfoFromCode(req: any, res: any) {
+        const device_type_id = String(req.otaAuth?.deviceTypeId || "");
         const data = DB.prepare(
             `SELECT firmware_version fv, firmware_build fb
              FROM device_types
@@ -116,22 +119,14 @@ export const OtaController = {
         ).get(device_type_id);
         respondToBuildReq(data, res);
     },
-    getBuildInfoFromCode(req: any, res: any) {
-        const { dev_code } = req.params
-        const data = DB.prepare(
-            `SELECT firmware_version fv, firmware_build fb FROM devices d
-                JOIN device_types dt ON d.device_type_id = dt.id
-                WHERE code = ?`
-        ).get(dev_code);
-        respondToBuildReq(data, res);
-    },
 
     UploadNewBuild(req: any, res: any) {
-        const { token, version } = req.body as any;
+        const deviceTypeId = String(req.otaAuth?.deviceTypeId || "");
+        const { version } = req.body as any;
         const file = req.file; // tipo Express.Multer.File | undefined
 
-        if (!token || !version || !file) {
-            return res.status(400).json({ error: "token, version or file missing" });
+        if (!deviceTypeId || !version || !file) {
+            return res.status(400).json({ error: "device type header, version or file missing" });
         }
         try {
             const stmt = DB.prepare(`
@@ -146,11 +141,11 @@ export const OtaController = {
             const result = stmt.run({
                 firmware_build: file.buffer,
                 firmware_version: version,
-                device_id: token,   // qui "token" è il code del device
+                device_id: deviceTypeId,
             });
 
             if (result.changes === 0) {
-                throw new Error(`No match for device code [${token}]`);
+                throw new Error(`No match for device type [${deviceTypeId}]`);
             }
         } catch (e) {
             return res.status(400).json({ error: `Error updating file: ${e}` });

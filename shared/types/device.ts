@@ -23,6 +23,10 @@ export interface DeviceWithRelations {
     device_properties?: string | Record<string, unknown> | null;
 }
 
+export interface DeviceProvisioningResult extends DeviceWithRelations {
+    ota_secret: string;
+}
+
 export interface DeviceShareRow {
     device_code: string;
     user_id: number;

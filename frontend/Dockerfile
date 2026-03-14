@@ -12,10 +12,6 @@ WORKDIR /app
 COPY shared ./shared
 WORKDIR /app/frontend
 
-# Optional backend URL at build time; leave empty to auto-detect at runtime
-ARG VITE_BACKEND_URL
-ENV VITE_BACKEND_URL=${VITE_BACKEND_URL}
-
 # Build static assets
 RUN npm run build
 

@@ -53,6 +53,7 @@ DB.exec(`
         device_type_id TEXT NOT NULL,
         owner_id INTEGER,
         activated INTEGER DEFAULT 0,
+        device_secret_hash TEXT NOT NULL,
         mqtt_enabled INTEGER DEFAULT 1,
         FOREIGN KEY(owner_id) REFERENCES users(id),
         FOREIGN KEY(device_type_id) REFERENCES device_types(id)
@@ -157,6 +158,9 @@ if (!userColumns.some((c) => c.name === "must_change_password")) {
     DB.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0");
 }
 const deviceColumns = DB.prepare("PRAGMA table_info(devices)").all() as Array<{ name: string }>;
+if (!deviceColumns.some((c) => c.name === "device_secret_hash")) {
+    DB.exec("ALTER TABLE devices ADD COLUMN device_secret_hash TEXT");
+}
 if (!deviceColumns.some((c) => c.name === "mqtt_enabled")) {
     DB.exec("ALTER TABLE devices ADD COLUMN mqtt_enabled INTEGER DEFAULT 1");
 }

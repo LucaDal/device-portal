@@ -12,23 +12,7 @@ const getDefaultApiBase = () => {
     return "/api";
 };
 
-const resolveApiBase = () => {
-    const envBase = import.meta.env.VITE_BACKEND_URL;
-    // If the bundle was built with localhost but we're being served from a different host,
-    // prefer auto-detection to avoid pointing to the client's localhost.
-    if (
-        envBase &&
-        typeof window !== "undefined" &&
-        window.location.hostname !== "localhost" &&
-        window.location.hostname !== "127.0.0.1" &&
-        envBase.includes("localhost")
-    ) {
-        return getDefaultApiBase();
-    }
-    return (envBase || getDefaultApiBase());
-};
-
-const API_BASE = resolveApiBase().replace(/\/$/, "");
+const API_BASE = getDefaultApiBase().replace(/\/$/, "");
 
 const handleUnauthorized = () => {
     localStorage.removeItem("user");

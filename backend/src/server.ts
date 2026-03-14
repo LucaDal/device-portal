@@ -8,12 +8,16 @@ import managementRoutes from "./routes/managementRoute";
 import otaRoutes from "./routes/otaRoutes";
 import mqttRoutes from "./routes/mqttRoutes";
 import "./config/database"; // inizializza DB
-import { JwtPayload } from "jsonwebtoken";
+import { User } from "@shared/types/user";
 
 declare global {
   namespace Express {
     interface Request {
-      user?: string | JwtPayload;
+      user?: User;
+      otaAuth?: {
+        deviceCode?: string;
+        deviceTypeId?: string;
+      };
     }
   }
 }
@@ -39,7 +43,7 @@ app.use((req, res, next) => {
 
   res.header(
     "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Device-Code, X-Device-Type-Id, X-Device-Secret"
   );
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
 

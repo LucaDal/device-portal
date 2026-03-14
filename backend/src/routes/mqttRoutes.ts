@@ -2,6 +2,7 @@ import { Router } from "express";
 import { MqttController } from "../controllers/mqttController";
 import { authMiddleware } from "../middleware/auth";
 import { adminOnly } from "../middleware/adminOnly";
+import { basicAuthMiddleware } from "../middleware/basicAuth";
 
 const router = Router();
 
@@ -11,6 +12,6 @@ router.post("/acl", MqttController.acl);
 router.get("/admin/acl/:deviceCode", authMiddleware, adminOnly, MqttController.listAclRules);
 router.post("/admin/acl/:deviceCode", authMiddleware, adminOnly, MqttController.upsertAclRule);
 router.delete("/admin/acl/rules/:id", authMiddleware, adminOnly, MqttController.deleteAclRule);
-router.post("/publish", MqttController.publishMessage);
+router.post("/publish", basicAuthMiddleware, MqttController.publishMessage);
 
 export default router;

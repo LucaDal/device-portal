@@ -15,10 +15,17 @@ export const DeviceTypeController = {
         }
 
         const { id, description, firmware_version } = req.body;
-        const firmware_build = req.file?.buffer;
+        const firmware_build = req.file?.buffer ?? Buffer.alloc(0);
+        const normalizedFirmwareVersion = req.file
+            ? String(firmware_version || "").trim()
+            : "0.0.0";
 
-        if (!id || !firmware_version || !firmware_build) {
+        if (!id) {
             return res.status(400).send({ error: "Missing fields" });
+        }
+
+        if (req.file && !normalizedFirmwareVersion) {
+            return res.status(400).send({ error: "Firmware version is required when uploading a file" });
         }
 
         const stmt = DB.prepare(`
@@ -33,7 +40,7 @@ export const DeviceTypeController = {
             VALUES (?, ?, ?, ?, ?, ?)
         `);
 
-        stmt.run(id, firmware_version, firmware_build, description, "{}", "{}");
+        stmt.run(id, normalizedFirmwareVersion, firmware_build, description, "{}", "{}");
 
         const created = DB.prepare(
             "SELECT id, description, firmware_version, created_at, deviceProperties, genericProperties FROM device_types WHERE id = ?"

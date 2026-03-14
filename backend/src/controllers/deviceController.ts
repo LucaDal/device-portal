@@ -1,12 +1,14 @@
 import { DB } from "../config/database";
 import crypto from "crypto";
 import { ROLES } from "@shared/constants/auth";
+import { DeviceProvisioningResult } from "@shared/types/device";
 import { SavedProperties } from "@shared/types/properties";
 import {
     decryptSensitiveDeviceProperties,
     encryptSensitiveDeviceProperties,
     parseTypePropertyDefinitions,
 } from "../utils/devicePropertiesSecurity";
+import { generateDeviceSecret, hashDeviceSecret } from "../utils/deviceSecrets";
 
 const SHARE_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -195,14 +197,11 @@ export const DeviceController = {
                 .json({ error: "code and device_type_id are required" });
         }
 
-        const stmt = DB.prepare(`
-INSERT INTO devices (code, device_type_id, owner_id, activated)
-VALUES (?, ?, ?, ?)
-`);
-
         try {
             let resolvedOwnerId: number | null = owner_id ? Number(owner_id) : null;
             const normalizedOwnerEmail = normalizeEmail(owner_email || "");
+            const deviceSecret = generateDeviceSecret();
+            const deviceSecretHash = hashDeviceSecret(deviceSecret);
             if (normalizedOwnerEmail) {
                 const ownerUser = DB.prepare("SELECT id FROM users WHERE email = ?").get(
                     normalizedOwnerEmail
@@ -213,11 +212,15 @@ VALUES (?, ?, ?, ?)
                 resolvedOwnerId = ownerUser.id;
             }
 
-            stmt.run(
+            DB.prepare(`
+INSERT INTO devices (code, device_type_id, owner_id, activated, device_secret_hash)
+VALUES (?, ?, ?, ?, ?)
+`).run(
                 code,
                 device_type_id,
                 resolvedOwnerId,
-                activated ? 1 : 0
+                activated ? 1 : 0,
+                deviceSecretHash
             );
 
             // riga iniziale per le properties del device
@@ -231,9 +234,16 @@ SELECT d.code, d.device_type_id, d.owner_id, u.email AS owner_email, d.activated
 FROM devices d
 LEFT JOIN users u ON u.id = d.owner_id
 WHERE d.code = ?
-`).get(code);
+`).get(code) as DeviceProvisioningResult | undefined;
 
-            res.status(201).json(created);
+            if (!created) {
+                return res.status(500).json({ error: "Created device could not be loaded" });
+            }
+
+            res.status(201).json({
+                ...created,
+                ota_secret: deviceSecret,
+            });
         } catch (e: any) {
             if (e.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || e.code === "SQLITE_CONSTRAINT_UNIQUE") {
                 return res.status(400).json({ error: "code already exists" });
@@ -241,6 +251,30 @@ WHERE d.code = ?
             console.error(e);
             res.status(500).json({ error: "Internal error" });
         }
+    },
+    regenerateOtaSecret(req: any, res: any) {
+        const code = String(req.params.code || "").trim();
+        if (!code) {
+            return res.status(400).send({ error: "Device code is required" });
+        }
+
+        const device = DB.prepare("SELECT code FROM devices WHERE code = ?").get(code) as
+            | { code: string }
+            | undefined;
+        if (!device) {
+            return res.status(404).send({ error: "Device not found" });
+        }
+
+        const deviceSecret = generateDeviceSecret();
+        const deviceSecretHash = hashDeviceSecret(deviceSecret);
+
+        DB.prepare("UPDATE devices SET device_secret_hash = ? WHERE code = ?").run(deviceSecretHash, code);
+
+        return res.send({
+            ok: true,
+            code,
+            ota_secret: deviceSecret,
+        });
     },
     // PUT /devices/:code/properties
     updateProperties(req: any, res: any) {

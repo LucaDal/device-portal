@@ -12,10 +12,16 @@ import {
     getMqttAclRules,
     upsertMqttAclRule,
     deleteMqttAclRule,
+    regenerateDeviceOtaSecret,
     revokeDeviceOwnership,
 } from "../devices/deviceService";
 import { DeviceType } from "@shared/types/device_type";
-import { DeviceShareInvitationRow, DeviceShareRow, DeviceWithRelations } from "@shared/types/device";
+import {
+    DeviceProvisioningResult,
+    DeviceShareInvitationRow,
+    DeviceShareRow,
+    DeviceWithRelations,
+} from "@shared/types/device";
 import { useAuth } from "../auth/AuthContext";
 import {
     DevicePropertyMap,
@@ -146,6 +152,7 @@ const DevicesPage: React.FC = () => {
     const [deviceTypeId, setDeviceTypeId] = useState<string | "">("");
     const [ownerEmail, setOwnerEmail] = useState("");
     const [activated, setActivated] = useState(false);
+    const [newDeviceSecret, setNewDeviceSecret] = useState<string | null>(null);
 
     const [selectedDevice, setSelectedDevice] = useState<DeviceWithRelations | null>(null);
     const [propertyRows, setPropertyRows] = useState<DevicePropertyRow[]>([]);
@@ -166,6 +173,7 @@ const DevicesPage: React.FC = () => {
     const [sharingSaving, setSharingSaving] = useState(false);
     const [shareEmail, setShareEmail] = useState("");
     const [shareCanWrite, setShareCanWrite] = useState(false);
+    const [rotatingSecret, setRotatingSecret] = useState(false);
 
     const [activeTab, setActiveTab] = useState<"create" | "list" | "properties">("list");
 
@@ -241,10 +249,20 @@ const DevicesPage: React.FC = () => {
         setActivated(false);
     };
 
+    const handleCopyText = async (value: string, message: string) => {
+        try {
+            await navigator.clipboard.writeText(value);
+            setSuccessMessage(message);
+        } catch {
+            setError("Could not copy value to clipboard.");
+        }
+    };
+
     const handleCreateDevice = async (e: FormEvent) => {
         e.preventDefault();
         setError(null);
         setSuccessMessage(null);
+        setNewDeviceSecret(null);
 
         if (!code.trim() || !deviceTypeId) {
             setError("Fill at least code and device type.");
@@ -252,18 +270,39 @@ const DevicesPage: React.FC = () => {
         }
 
         try {
-            await createDevice({
+            const created = await createDevice({
                 code: code.trim(),
                 device_type_id: deviceTypeId,
                 owner_email: ownerEmail.trim() || undefined,
                 activated,
-            });
-            setSuccessMessage("Device created successfully.");
+            }) as DeviceProvisioningResult;
+            setNewDeviceSecret(created.ota_secret);
+            setSuccessMessage("Device created successfully. Save the OTA secret now.");
             resetNewDeviceForm();
             await fetchAll();
-            setActiveTab("list");
         } catch (err: any) {
             setError(err?.error || "Error while creating device.");
+        }
+    };
+
+    const handleRegenerateOtaSecret = async (device: DeviceWithRelations) => {
+        if (!isAdmin) return;
+        if (!window.confirm(`Regenerate OTA secret for device "${device.code}"? The old secret will stop working.`)) {
+            return;
+        }
+
+        try {
+            setRotatingSecret(true);
+            setError(null);
+            setSuccessMessage(null);
+            const result = await regenerateDeviceOtaSecret(device.code);
+            setNewDeviceSecret(result.ota_secret);
+            setSuccessMessage(`OTA secret regenerated for ${device.code}. Save the new value now.`);
+            window.prompt(`New OTA secret for ${device.code}. Copy it now:`, result.ota_secret);
+        } catch (err: any) {
+            setError(err?.error || "Error while regenerating OTA secret.");
+        } finally {
+            setRotatingSecret(false);
         }
     };
 
@@ -434,12 +473,7 @@ const DevicesPage: React.FC = () => {
     };
 
     const handleCopyDeviceCode = async (deviceCode: string) => {
-        try {
-            await navigator.clipboard.writeText(deviceCode);
-            setSuccessMessage(`Code copied: ${deviceCode}`);
-        } catch {
-            setError("Could not copy device code to clipboard.");
-        }
+        await handleCopyText(deviceCode, `Code copied: ${deviceCode}`);
     };
 
     const handleShareDevice = async () => {
@@ -605,6 +639,20 @@ const DevicesPage: React.FC = () => {
                             </div>
 
                             {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
+                            {newDeviceSecret && (
+                                <div className="dt-alert dt-alert-success">
+                                    <strong>OTA secret</strong>
+                                    <div className="device-secret-block">{newDeviceSecret}</div>
+                                    <p className="dt-small">Shown only now. Save it on the device firmware or provisioning flow.</p>
+                                    <button
+                                        type="button"
+                                        className="dt-btn dt-btn-outline"
+                                        onClick={() => handleCopyText(newDeviceSecret, "OTA secret copied to clipboard.")}
+                                    >
+                                        Copy OTA secret
+                                    </button>
+                                </div>
+                            )}
 
                             <button type="submit" className="dt-btn dt-btn-primary">
                                 Create device
@@ -718,6 +766,16 @@ const DevicesPage: React.FC = () => {
                                         <strong>{selectedDevice.code}</strong> (
                                         {selectedDevice.device_type_description ?? `type #${selectedDevice.device_type_id}`})
                                     </p>
+                                    {isAdmin && (
+                                        <button
+                                            type="button"
+                                            className="dt-btn dt-btn-outline"
+                                            disabled={rotatingSecret}
+                                            onClick={() => handleRegenerateOtaSecret(selectedDevice)}
+                                        >
+                                            {rotatingSecret ? "Regenerating..." : "Regenerate OTA secret"}
+                                        </button>
+                                    )}
                                 </div>
 
                                 <div className={canViewSecurity ? "device-detail-grid" : "device-detail-grid single"}>

@@ -1,7 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { DB } from "../config/database";
-import { AUTH_ERROR_CODES } from "@shared/constants/auth";
+import { AUTH_ERROR_CODES, Role } from "@shared/constants/auth";
+import { User } from "@shared/types/user";
 
 const JWT_SECRET = process.env.JWT_SECRET || "cambiami_subito";
 
@@ -9,7 +10,14 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   const header = req.headers.authorization;
   if (!header) return res.status(401).send({ error: "Missing token" });
 
-  const token = header.split(" ")[1];
+  if (!header.startsWith("Bearer ")) {
+    return res.status(401).send({ error: "Invalid token" });
+  }
+
+  const token = header.slice(7).trim();
+  if (!token) {
+    return res.status(401).send({ error: "Invalid token" });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as { id?: number };
@@ -20,7 +28,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
     const user = DB.prepare(
       "SELECT id, email, role, must_change_password FROM users WHERE id = ?"
     ).get(decoded.id) as
-      | { id: number; email: string; role: string; must_change_password: number }
+      | { id: number; email: string; role: Role; must_change_password: number }
       | undefined;
 
     if (!user) {
@@ -35,7 +43,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
       });
     }
 
-    req.user = user;
+    req.user = user as User;
     next();
   } catch {
     return res.status(401).send({ error: "Invalid token" });

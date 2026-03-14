@@ -22,24 +22,20 @@ DEVICE_PROPERTIES_ENCRYPTION_KEY=change-me
 # CORS_ALLOWED_ORIGINS=http://localhost:5173,https://dashboard.example.com
 
 # SQLite path inside the container and on the host
-DB_PATH=/app/backend/data.db
-DB_PATH_HOST=./backend/data.db
-
-# Frontend build-time backend URL (baked into the bundle)
-# Leave empty to auto-detect:
-# - If UI served on :5173, it will call http(s)://<host>:3000
-# - Otherwise it will call /api on the same origin (behind a reverse proxy)
-VITE_BACKEND_URL=
+DB_PATH=/app/backend/data/data.db
+DB_PATH_HOST=./data
 
 # Request logs for the API (true/false)
 ENABLE_REQUEST_LOGS=false
 ```
 Notes:
 - `ADMIN_EMAIL`/`ADMIN_PASSWORD` are only used on first start to create the admin user.
-- `DB_PATH_HOST` controls where the SQLite file lives on the host; `DB_PATH` is the in-container path (rarely needs changing).
-- `VITE_BACKEND_URL` is read at frontend build time: leave it empty for auto-detect, or set it to `/api` (behind Nginx) or a full URL (e.g., `http://localhost:3000`). Rebuild the `ui` image after changes.
+- `DB_PATH_HOST` controls the host directory mounted into the container; `DB_PATH` is the SQLite file path inside that mounted directory.
 - CORS is allowlist-based via `CORS_ALLOWED_ORIGINS`.
 - In the current `docker-compose.yml`, API defaults to `CORS_ALLOWED_ORIGINS=http://localhost:5173`, so local setup works without extra changes.
+- The frontend does not use build-time backend env variables anymore:
+  - on `:5173` it calls `http(s)://<host>:3000`
+  - behind a reverse proxy it calls `/api`
 - `ENABLE_REQUEST_LOGS=false` keeps logs to explicit app messages only.
 - `DEVICE_PROPERTIES_ENCRYPTION_KEY` is required if you enable sensitive encrypted device properties.
 
@@ -95,12 +91,16 @@ The `nginx.conf` file fronts API and UI.
         }
       }
    ```
+2) If the public UI origin is, for example, `https://deviceportal.lucaexample.org`, set:
+   ```env
+   CORS_ALLOWED_ORIGINS=https://deviceportal.lucaexample.org
+   ```
 
 ## Quick troubleshooting
 - 401/403 from the frontend: check `JWT_SECRET` consistency and ensure frontend origin is included in `CORS_ALLOWED_ORIGINS`.
-- DB not found: ensure `DB_PATH_HOST` exists on the host and matches the volume target.
-- Bind mount fails with "not a directory": the host path in `DB_PATH_HOST` must be a file, not a directory. If you point to a new path, create it first (e.g., `mkdir -p /home/pi/device-portal && touch /home/pi/device-portal/data.db`) before `docker compose up`.
-- Frontend can’t reach backend: verify `VITE_BACKEND_URL` (build-time) and `CORS_ALLOWED_ORIGINS` (API runtime) point to the correct host/ports, and that ports 3000/5173 are exposed.
+- DB not found: ensure `DB_PATH_HOST` exists on the host and matches the mounted directory.
+- If you point `DB_PATH_HOST` to a new location, create the directory first (e.g. `mkdir -p /home/pi/device-portal/data`) before `docker compose up`.
+- Frontend can’t reach backend: verify the reverse proxy path `/api` or direct backend port `3000`, and ensure `CORS_ALLOWED_ORIGINS` matches the frontend origin.
 
 ## EMQX 5 HTTP Auth/ACL integration
 Backend now exposes:
@@ -193,18 +193,66 @@ Generate Basic token example:
 printf '%s' 'device@example.com:my-secret' | base64
 ```
 
-## Retrieve properties by device code
+## OTA API
 
-Use the OTA endpoint:
+Sensitive device identifiers are no longer passed in URL paths or request bodies.
+Use request headers instead:
+- `x-device-code` for device-specific requests.
+- `x-device-secret` for device authentication.
+- `x-device-type-id` for device-type resolution.
+
+Request model:
+- properties: `x-device-code` + `x-device-secret`
+- version: `x-device-type-id` + `x-device-secret`, or `x-device-type-id` + `Authorization: Basic ...` with an admin account
+- build: `x-device-code` + `x-device-type-id` + `x-device-secret`
+
+### Retrieve properties
 
 ```bash
-curl "http://localhost:3000/ota/<device-code>/properties"
+curl "http://localhost:3000/ota/properties" \
+  -H "x-device-code: ESP32-001" \
+  -H "x-device-secret: <DEVICE_SECRET>"
 ```
 
-Example:
+### Retrieve build metadata for one device
 
 ```bash
-curl "http://localhost:3000/ota/ESP32-001/properties"
+curl "http://localhost:3000/ota/version" \
+  -H "x-device-type-id: esp32-devkit" \
+  -H "x-device-secret: <DEVICE_SECRET>"
+```
+
+Admin alternative:
+
+```bash
+curl "http://localhost:3000/ota/version" \
+  -H "Authorization: Basic <BASE64_ADMIN_EMAIL_PASSWORD>" \
+  -H "x-device-type-id: esp32-devkit"
+```
+
+### Download build for one device
+
+```bash
+curl "http://localhost:3000/ota/build" \
+  -H "x-device-code: ESP32-001" \
+  -H "x-device-type-id: esp32-devkit" \
+  -H "x-device-secret: <DEVICE_SECRET>" \
+  -o firmware.bin
+```
+
+### Upload a new build
+
+Requirements:
+- `Authorization: Basic <base64(email:password)>`
+- authenticated user role must be `admin`
+- `x-device-type-id` header is required
+
+```bash
+curl -X POST "http://localhost:3000/ota/upload" \
+  -H "Authorization: Basic <BASE64_EMAIL_PASSWORD>" \
+  -H "x-device-type-id: esp32-devkit" \
+  -F "version=1.2.3" \
+  -F "file=@firmware.bin"
 ```
 
 Response format (generic):

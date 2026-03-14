@@ -188,19 +188,17 @@ const DeviceTypesPage: React.FC = () => {
         setError(null);
         setSuccessMessage(null);
 
-        if (!firmwareVersion.trim() || !typeId.trim()) {
-            setError("Compile every field.");
+        if (!typeId.trim()) {
+            setError("Type ID is required.");
             return;
         }
 
-        const fwError = validateFirmwareVersion(firmwareVersion);
-        if (fwError) {
-            setError(fwError);
-            return;
-        }
-        if (!firmwareFile) {
-            setError("Select a .bin file (max 10MB).");
-            return;
+        if (firmwareFile) {
+            const fwError = validateFirmwareVersion(firmwareVersion);
+            if (fwError) {
+                setError(fwError);
+                return;
+            }
         }
 
         try {
@@ -208,8 +206,10 @@ const DeviceTypesPage: React.FC = () => {
             const formData = new FormData();
             formData.append("id", typeId);
             formData.append("description", description);
-            formData.append("firmware_version", firmwareVersion);
-            formData.append("firmware_build", firmwareFile);
+            if (firmwareFile) {
+                formData.append("firmware_version", firmwareVersion);
+                formData.append("firmware_build", firmwareFile);
+            }
 
             await updateDeviceType("", "POST", formData);
             setSuccessMessage("Operazione eseguita con successo.");
@@ -566,11 +566,14 @@ const DeviceTypesPage: React.FC = () => {
                                 onChange={(e) => setFirmwareVersion(e.target.value)}
                                 placeholder="E.g. 1.0.0, 2.1.3, ..."
                             />
+                            <small className="dt-help-text">
+                                Optional on creation. If no firmware file is uploaded, version will be set to 0.0.0.
+                            </small>
                         </div>
 
                         <div className="dt-form-group">
                             <label htmlFor="firmwareFile">
-                                Firmware file <span className="dt-chip">required</span>
+                                Firmware file <span className="dt-chip">optional</span>
                             </label>
 
                             <div className="dt-file-input">
@@ -594,7 +597,9 @@ const DeviceTypesPage: React.FC = () => {
                                 </span>
                             </div>
 
-                            <small className="dt-help-text">Max 10MB.</small>
+                            <small className="dt-help-text">
+                                Max 10MB. If omitted, an empty firmware placeholder will be created with version 0.0.0.
+                            </small>
                         </div>
 
                         <button

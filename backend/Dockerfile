@@ -29,7 +29,6 @@ ENV NODE_ENV=production
 COPY --from=builder /app/backend/package*.json ./
 COPY --from=builder /app/backend/node_modules ./node_modules
 COPY --from=builder /app/backend/dist ./dist
-COPY --from=builder /app/shared ../shared
 
 # Ensure native modules (e.g., bcrypt) are built for the target arch in the final image
 RUN apt-get update \
@@ -39,8 +38,8 @@ RUN apt-get update \
   && apt-get purge -y python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-# Provide runtime alias for "@shared/*" imports
-RUN ln -s /app/shared /app/backend/node_modules/@shared
+# Provide runtime alias for "@shared/*" imports using compiled JS output
+RUN ln -s /app/backend/dist/shared /app/backend/node_modules/@shared
 
 EXPOSE 3000
 CMD ["node", "dist/backend/src/server.js"]

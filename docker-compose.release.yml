@@ -13,16 +13,14 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # persist SQLite DB outside the container; host path configurable via DB_PATH_HOST
-      - ${DB_PATH_HOST:-./backend/data.db}:${DB_PATH:-/app/backend/data.db}
+      # persist SQLite data dir outside the container; use directory-to-directory mount for portability
+      - ${DB_PATH_HOST:-./data}:/app/backend/data
     restart: unless-stopped
 
   ui:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-      args:
-        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-}
     ports:
       - "5173:5173"
     restart: unless-stopped

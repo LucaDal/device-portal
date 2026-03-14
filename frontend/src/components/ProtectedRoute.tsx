@@ -9,8 +9,9 @@ interface Props {
 }
 
 const ProtectedRoute = ({ children, allowedRoles }: Props) => {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
 
+  if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
   if (allowedRoles && !allowedRoles.includes(user.role)) return <Navigate to="/access-denied" replace />;
 

@@ -8,6 +8,10 @@ const DEFAULT_SETTINGS: MqttBrokerSettings = {
     username: "",
     password: "",
     clientIdPrefix: "device-portal-api",
+    allowInsecureTls: false,
+    caFile: "",
+    clientCertFile: "",
+    clientKeyFile: "",
 };
 
 const KEY = "mqtt_broker_settings";
@@ -25,6 +29,10 @@ function parseSettings(raw: string | null | undefined): MqttBrokerSettings {
             username: String(parsed.username || ""),
             password: String(parsed.password || ""),
             clientIdPrefix: String(parsed.clientIdPrefix || DEFAULT_SETTINGS.clientIdPrefix),
+            allowInsecureTls: parsed.allowInsecureTls === true,
+            caFile: String(parsed.caFile || ""),
+            clientCertFile: String(parsed.clientCertFile || ""),
+            clientKeyFile: String(parsed.clientKeyFile || ""),
         };
     } catch {
         return { ...DEFAULT_SETTINGS };
@@ -52,11 +60,23 @@ export const SettingsController = {
             const username = String(body.username || "").trim();
             const password = String(body.password || "").trim();
             const clientIdPrefix = String(body.clientIdPrefix || DEFAULT_SETTINGS.clientIdPrefix).trim();
+            const allowInsecureTls = body.allowInsecureTls === true;
+            const caFile = String(body.caFile || "").trim();
+            const clientCertFile = String(body.clientCertFile || "").trim();
+            const clientKeyFile = String(body.clientKeyFile || "").trim();
             const port = Number(body.port);
 
             if (!host) return res.status(400).send({ error: "host is required" });
             if (!Number.isFinite(port) || port <= 0 || port > 65535) {
                 return res.status(400).send({ error: "port is invalid" });
+            }
+            if (protocol === "mqtts" && !allowInsecureTls && !caFile) {
+                return res.status(400).send({ error: "caFile is required when protocol is mqtts" });
+            }
+            if ((clientCertFile && !clientKeyFile) || (!clientCertFile && clientKeyFile)) {
+                return res.status(400).send({
+                    error: "clientCertFile and clientKeyFile must be provided together",
+                });
             }
 
             const payload: MqttBrokerSettings = {
@@ -66,6 +86,10 @@ export const SettingsController = {
                 username,
                 password,
                 clientIdPrefix: clientIdPrefix || DEFAULT_SETTINGS.clientIdPrefix,
+                allowInsecureTls,
+                caFile,
+                clientCertFile,
+                clientKeyFile,
             };
 
             DB.prepare(`

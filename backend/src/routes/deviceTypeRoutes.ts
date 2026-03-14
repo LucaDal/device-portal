@@ -2,9 +2,7 @@ import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { DeviceTypeController } from "../controllers/deviceTypeController";
 import { adminOnly } from "../middleware/adminOnly";
-
-import multer from "multer";
-const upload = multer();
+import { singleUpload } from "../middleware/upload";
 const router = Router();
 
 router.get("/", authMiddleware, DeviceTypeController.list);
@@ -12,7 +10,7 @@ router.post(
     "/",
     authMiddleware,
     adminOnly,
-    upload.single("firmware_build"), // nome del campo file nel formData
+    singleUpload("firmware_build"), // nome del campo file nel formData
     DeviceTypeController.create
 );
 
@@ -21,7 +19,7 @@ router.put(
     "/:id",
     authMiddleware,
     adminOnly,
-    upload.single("firmware_build"),
+    singleUpload("firmware_build"),
     DeviceTypeController.update
 );
 

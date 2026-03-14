@@ -1,106 +1,280 @@
 # Device Portal
 
-Quick setup notes for environment variables and the Nginx reverse proxy.
+Deployment notes for the Docker setup, the host-level Nginx reverse proxy, and the required runtime secrets.
 
-## Environment variables (.env)
-Create a `.env` in the project root. Suggested template (or in backend folder while developing):
-```
-# Admin created at first boot only
+## Security model
+- Docker publishes API and UI on `127.0.0.1` only.
+- Nginx runs on the host and is the only public entrypoint.
+- Browser authentication uses an `HttpOnly` session cookie instead of storing the JWT in `localStorage`.
+- Sensitive HTTP paths use lightweight in-memory rate limiting.
+- MQTT ACL integration requires a shared secret and validates TLS certificates when using `mqtts`.
+
+This setup works well on low-power hosts such as Raspberry Pi 4 as long as you keep a single API instance per host.
+
+## Environment variables
+Create `.env` in the project root from `.env.example`.
+
+```env
+# Admin bootstrap user. Used only if the admin account does not exist yet.
 ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=admin
+ADMIN_PASSWORD=replace-with-a-strong-admin-password
 
-# JWT signing secret: use a long random value
-JWT_SECRET=change-me-please
+# JWT signing secret for the HttpOnly session cookie.
+JWT_SECRET=replace-with-a-strong-random-secret-at-least-32-chars
 
-# Encryption key for sensitive device properties (string fields with sensitive=true)
-# Use 64 hex chars (32 bytes) or base64 for 32 raw bytes
-DEVICE_PROPERTIES_ENCRYPTION_KEY=change-me
+# Shared secret required by the EMQX/HTTP ACL hook.
+MQTT_HTTP_AUTH_SECRET=replace-with-a-strong-random-secret-at-least-32-chars
 
-# Backend CORS allowlist (comma-separated).
-# With the current docker-compose defaults, localhost:5173 is already used if this is omitted.
-# Set this only when UI origin changes (for example a public domain).
-# CORS_ALLOWED_ORIGINS=http://localhost:5173,https://dashboard.example.com
+# Encryption key for sensitive device string properties.
+# Use 64 hex chars (32 bytes) or base64 for 32 raw bytes.
+DEVICE_PROPERTIES_ENCRYPTION_KEY=a7ff4c72a483f6ea9cabc39a0c6ddd3ece36f55a3d0f9cdb8c26a1d13c0378d3
 
-# SQLite path inside the container and on the host
+# Comma-separated browser allowlist for API requests.
+CORS_ALLOWED_ORIGINS=http://localhost:5173,https://deviceportal.example.org
+
+# SQLite file path inside the API container.
 DB_PATH=/app/backend/data/data.db
+
+# Host directory mounted into the API container.
 DB_PATH_HOST=./data
 
-# Request logs for the API (true/false)
+# Optional API request logging.
 ENABLE_REQUEST_LOGS=false
 ```
+
 Notes:
-- `ADMIN_EMAIL`/`ADMIN_PASSWORD` are only used on first start to create the admin user.
-- `DB_PATH_HOST` controls the host directory mounted into the container; `DB_PATH` is the SQLite file path inside that mounted directory.
-- CORS is allowlist-based via `CORS_ALLOWED_ORIGINS`.
-- In the current `docker-compose.yml`, API defaults to `CORS_ALLOWED_ORIGINS=http://localhost:5173`, so local setup works without extra changes.
-- The frontend does not use build-time backend env variables anymore:
-  - on `:5173` it calls `http(s)://<host>:3000`
-  - behind a reverse proxy it calls `/api`
-- `ENABLE_REQUEST_LOGS=false` keeps logs to explicit app messages only.
-- `DEVICE_PROPERTIES_ENCRYPTION_KEY` is required if you enable sensitive encrypted device properties.
+- `ADMIN_EMAIL` and `ADMIN_PASSWORD` are only used when the admin user does not exist yet.
+- `JWT_SECRET` and `MQTT_HTTP_AUTH_SECRET` should both be long random values and must be kept private.
+- `DB_PATH_HOST` controls the host directory mounted into the API container; `DB_PATH` is the SQLite file path inside that directory.
+- `CORS_ALLOWED_ORIGINS` must match the public frontend origin served by Nginx.
 
-## Running with Docker Compose
-- Local build: `docker compose build` then `docker compose up -d`.
-- Using published images: set `image:` on services (e.g. `lucadal/device-portal:api` and `lucadal/device-portal:ui`), then `docker compose pull && docker compose up -d`.
-- If UI origin changes, override `CORS_ALLOWED_ORIGINS` in `.env` (or in compose environment) with a comma-separated list of allowed origins.
+## Docker Compose
+Use either the published images file or the local build file.
 
-## Multi-arch builds with Buildx
-If you need both amd64 and arm64 (e.g., Raspberry Pi) from one build:
-- Install buildx (Arch: `sudo pacman -S docker-buildx`; Debian/Ubuntu: `sudo apt-get install docker-buildx-plugin`).
-- Create and bootstrap a builder:
-  ```bash
-  docker buildx create --name multi --use
-  docker buildx inspect --bootstrap
-  ```
-- Build and push multi-arch images:
-  ```bash
-  docker buildx build --platform linux/amd64,linux/arm64 \
-    -t lucadal/device-portal:api \
-    -f backend/Dockerfile . \
-    --push
+- `docker-compose.yml`: uses published images.
+- `docker-compose.release.yml`: builds locally from the repository.
 
-  docker buildx build --platform linux/amd64,linux/arm64 \
-    -t lucadal/device-portal:ui \
-    -f frontend/Dockerfile . \
-    --push
-  ```
-Use separate tags (e.g., `:api`, `:ui`, or versioned tags) as needed. After pushing, `docker pull` will grab the right architecture automatically.
+Start the stack:
 
-## Nginx reverse proxy
-The `nginx.conf` file fronts API and UI.
-1) Rename `nginx.conf - cpy` to `nginx.conf` and update upstreams to your Compose service names (e.g. `api` and `ui`):
-   ```nginx
-      server {
-        listen 80;
-        server_name _;
+```bash
+docker compose up -d
+```
 
-        # API -> backend
-        location /api/ {
-          proxy_pass http://localhost:3000/;
-          proxy_set_header Host $host;
-          proxy_set_header X-Real-IP $remote_addr;
-        }
+Important:
+- API is bound to `127.0.0.1:3000`.
+- UI is bound to `127.0.0.1:5173`.
+- Neither service is meant to be exposed directly on the public network.
 
-        # Frontend (Vite dev server, includes websocket upgrade)
-        location / {
-          proxy_pass http://localhost:5173/;
-          proxy_http_version 1.1;
-          proxy_set_header Host $host;
-          proxy_set_header Upgrade $http_upgrade;
-          proxy_set_header Connection "upgrade";
-        }
-      }
-   ```
-2) If the public UI origin is, for example, `https://deviceportal.lucaexample.org`, set:
-   ```env
-   CORS_ALLOWED_ORIGINS=https://deviceportal.lucaexample.org
-   ```
+If you want to store database files on a different host path:
 
-## Quick troubleshooting
-- 401/403 from the frontend: check `JWT_SECRET` consistency and ensure frontend origin is included in `CORS_ALLOWED_ORIGINS`.
-- DB not found: ensure `DB_PATH_HOST` exists on the host and matches the mounted directory.
-- If you point `DB_PATH_HOST` to a new location, create the directory first (e.g. `mkdir -p /home/pi/device-portal/data`) before `docker compose up`.
-- Frontend can’t reach backend: verify the reverse proxy path `/api` or direct backend port `3000`, and ensure `CORS_ALLOWED_ORIGINS` matches the frontend origin.
+```bash
+mkdir -p /home/pi/device-portal/data
+```
+
+Then update `DB_PATH_HOST` in `.env` before starting the stack.
+
+## Reverse proxy with host Nginx
+Because Nginx runs on the host, proxy to the localhost-bound container ports.
+
+Example:
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:5173/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+If the public frontend origin is `https://deviceportal.example.org`, set:
+
+```env
+CORS_ALLOWED_ORIGINS=https://deviceportal.example.org
+```
+
+## Multi-arch builds
+To publish both `amd64` and `arm64` images, for example for Raspberry Pi:
+
+```bash
+docker buildx create --name multi --use
+docker buildx inspect --bootstrap
+
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t lucadal/device-portal:api \
+  -f backend/Dockerfile . \
+  --push
+
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t lucadal/device-portal:ui \
+  -f frontend/Dockerfile . \
+  --push
+```
+
+## MQTT ACL integration
+The backend exposes:
+- `POST /mqtt/acl`
+
+Requirements:
+- `MQTT_HTTP_AUTH_SECRET` must be configured.
+- EMQX must send the same secret in `x-mqtt-auth-secret`.
+- Unknown clients and missing/invalid secrets are denied.
+
+Example EMQX HTTP authz source:
+
+```json
+{
+  "clientid": "${clientid}",
+  "topic": "${topic}",
+  "action": "${action}"
+}
+```
+
+Use this backend URL from EMQX:
+
+```text
+http://127.0.0.1:3000/mqtt/acl
+```
+
+Adjust it if EMQX runs in another host or container namespace.
+
+## MQTT publish API
+The backend exposes:
+- `POST /mqtt/publish`
+
+Requirements:
+- HTTPS in production.
+- `Authorization: Basic <base64(email:password)>`.
+- MQTT broker settings configured by an admin user.
+- The user must be enabled for MQTT publish and allowed by topic ACL rules.
+
+When `protocol` is `mqtts`:
+- `CA file path` is required and must point to a readable file inside the API container.
+- `Client certificate path` and `Client key path` are optional, but they must be set together when the broker requires mutual TLS.
+- For a self-signed broker, mount the certificate files into the API container and use the in-container paths in the Settings page.
+- `Allow insecure TLS` enables `mosquitto_pub --insecure` and skips server certificate validation.
+
+Certificate files are not uploaded from the browser. The API process reads them directly from the container filesystem when it runs `mosquitto_pub`.
+
+Recommended flow:
+1. Place the TLS files on the Docker host.
+2. Mount that directory into the `api` container as read-only.
+3. Enter the mounted in-container paths in the Settings page.
+
+Example host files:
+
+```text
+/home/pi/device-portal/certs/ca.crt
+/home/pi/device-portal/certs/client.crt
+/home/pi/device-portal/certs/client.key
+```
+
+Example `docker-compose` volume for the `api` service:
+
+```yaml
+api:
+  volumes:
+    - ${DB_PATH_HOST:-./data}:/app/backend/data
+    - /home/pi/device-portal/certs:/etc/device-portal/mqtt:ro
+```
+
+Example Settings values:
+- `CA file path`: `/etc/device-portal/mqtt/ca.crt`
+- `Client certificate path`: `/etc/device-portal/mqtt/client.crt`
+- `Client key path`: `/etc/device-portal/mqtt/client.key`
+
+For a self-signed broker without mutual TLS:
+- set only `CA file path`
+- leave `Client certificate path` and `Client key path` empty
+
+If the broker is on the same trusted host and you explicitly want to skip certificate validation:
+- enable `Allow insecure TLS`
+- `CA file path` becomes optional
+- this is less secure and should only be used for controlled local deployments
+
+For a broker that requires mutual TLS:
+- set all three paths
+- ensure the mounted files are readable by the API container
+
+Example:
+
+```bash
+curl -X POST "https://deviceportal.example.org/api/mqtt/publish" \
+  -H "Authorization: Basic <BASE64_EMAIL_PASSWORD>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "topic": "devices/ESP32-001/commands",
+    "content": {
+      "action": "reboot",
+      "delaySec": 3
+    }
+  }'
+```
+
+## OTA API
+Sensitive device identifiers are passed via headers, not in URL parameters or request bodies.
+
+Headers:
+- `x-device-code`
+- `x-device-secret`
+- `x-device-type-id`
+
+Request model:
+- properties: `x-device-code` + `x-device-secret`
+- version: `x-device-type-id` + `x-device-secret`, or admin `Authorization: Basic ...`
+- build: `x-device-code` + `x-device-type-id` + `x-device-secret`
+
+Examples:
+
+```bash
+curl "http://127.0.0.1:3000/ota/properties" \
+  -H "x-device-code: ESP32-001" \
+  -H "x-device-secret: <DEVICE_SECRET>"
+```
+
+```bash
+curl "http://127.0.0.1:3000/ota/version" \
+  -H "x-device-type-id: esp32-devkit" \
+  -H "x-device-secret: <DEVICE_SECRET>"
+```
+
+```bash
+curl "http://127.0.0.1:3000/ota/build" \
+  -H "x-device-code: ESP32-001" \
+  -H "x-device-type-id: esp32-devkit" \
+  -H "x-device-secret: <DEVICE_SECRET>" \
+  -o firmware.bin
+```
+
+Admin upload example:
+
+```bash
+curl -X POST "http://127.0.0.1:3000/ota/upload" \
+  -H "Authorization: Basic <BASE64_EMAIL_PASSWORD>" \
+  -H "x-device-type-id: esp32-devkit" \
+  -F "version=1.2.3" \
+  -F "file=@firmware.bin"
+```
+
+## Troubleshooting
+- `401` or `403` in the browser: verify `JWT_SECRET`, session cookie forwarding, and `CORS_ALLOWED_ORIGINS`.
+- API unreachable from Nginx: check that Docker is listening on `127.0.0.1:3000` and `127.0.0.1:5173`.
+- DB file missing: create the `DB_PATH_HOST` directory before starting the stack.
+- EMQX ACL denies everything: verify `MQTT_HTTP_AUTH_SECRET` on both sides and confirm the device code matches the MQTT `clientId`.
 
 ## EMQX 5 HTTP Auth/ACL integration
 Backend now exposes:
@@ -130,7 +304,7 @@ Use this checklist in EMQX Dashboard (no `base.hocon` editing required).
    - `URL`: `http://<YOUR_BACKEND_HOST>:3000/mqtt/acl`
    - `Headers`:
      - `content-type: application/json`
-     - `x-emqx-auth-secret: <same value as MQTT_HTTP_AUTH_SECRET>`
+     - `x-mqtt-auth-secret: <same value as MQTT_HTTP_AUTH_SECRET>`
    - `Body`:
      ```json
      {
@@ -156,7 +330,7 @@ Use this checklist in EMQX Dashboard (no `base.hocon` editing required).
   the client cannot publish or subscribe to any topic.
 
 Notes:
-- Protect hooks with `MQTT_HTTP_AUTH_SECRET` and send the same value from EMQX in `x-emqx-auth-secret`.
+- Protect hooks with `MQTT_HTTP_AUTH_SECRET` and send the same value from EMQX in `x-mqtt-auth-secret`.
 - Device authentication is handled natively by EMQX (mTLS). Backend only handles ACL decisions via `/mqtt/acl`.
 - Dynamic ACL rules are stored in `mqtt_acl_rules` and can be managed by admin users only via `/mqtt/admin/*`.
 

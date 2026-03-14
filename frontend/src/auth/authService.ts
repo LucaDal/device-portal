@@ -14,7 +14,6 @@ interface RegisterUser {
 };
 
 interface LoginResponse {
-    token: string;
     user: User;
 }
 interface RegisterResponse {
@@ -31,6 +30,18 @@ export async function login(payload: LoginPayload): Promise<LoginResponse> {
     return  await apiFetch<LoginResponse>("/auth/login", {
         method: "POST",
         body: JSON.stringify(payload)
+    });
+}
+
+export async function loadCurrentUser(): Promise<{ user: User }> {
+    return apiFetchWithAuth<{ user: User }>("/auth/me", {
+        suppressUnauthorizedRedirect: true,
+    });
+}
+
+export async function logout(): Promise<{ ok: boolean }> {
+    return apiFetchWithAuth<{ ok: boolean }>("/auth/logout", {
+        method: "POST",
     });
 }
 

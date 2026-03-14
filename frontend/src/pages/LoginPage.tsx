@@ -20,7 +20,7 @@ export default function LoginPage() {
 
         try {
             const ret = await apiLogin({ email, password });
-            login(ret.user, ret.token);
+            login(ret.user);
             if (ret.user.must_change_password) {
                 navigate("/change-password");
                 return;

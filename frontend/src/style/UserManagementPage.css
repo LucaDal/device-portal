@@ -1,16 +1,16 @@
+@import "./dt-shared.css";
+
 .users-page {
-  max-width: 1100px;
+  max-width: 1220px;
   margin: 32px auto;
-  padding: 0 20px;
+  padding: 0 20px 28px;
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
 .users-header {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  margin-bottom: 2px;
 }
 
 .users-title {
@@ -28,22 +28,25 @@
 
 .users-card {
   border: 1px solid #374151;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 16px;
-  background-color: #1f2937;
+  background-color: #111827;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  box-shadow: 0 20px 26px -26px rgba(15, 23, 42, 0.95);
 }
 
-.users-card-head {
+.users-card-head,
+.users-subsection-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.users-card-head h2 {
+.users-card-head h2,
+.users-subsection-head h3 {
   margin: 0;
   color: #f3f4f6;
   font-size: 1.05rem;
@@ -63,69 +66,23 @@
   border: 1px solid rgba(59, 130, 246, 0.4);
 }
 
-.users-row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background-color: #111827;
-  color: #f3f4f6;
-  border: 1px solid transparent;
-  transition: border-color 0.15s ease, transform 0.15s ease;
-}
-
-.users-row:hover {
-  border-color: #334155;
-  transform: translateY(-1px);
-}
-
-.users-main {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 240px;
-  flex: 1;
-}
-
-.users-email {
-  font-weight: 600;
-  color: #f8fafc;
-}
-
-.users-meta {
-  color: #94a3b8;
-  font-size: 0.82rem;
-}
-
-.users-actions {
-  display: flex;
-  align-items: center;
+.users-invite-grid,
+.users-acl-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(140px, 0.8fr) minmax(110px, 0.6fr) auto;
   gap: 8px;
-}
-
-.users-checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #d1d5db;
-  font-size: 0.82rem;
 }
 
 .users-invite-grid {
-  display: grid;
-  grid-template-columns: 1.6fr 0.8fr auto;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1.8fr) minmax(140px, 0.8fr) auto;
 }
 
 .users-input,
 .users-select {
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
   border: 1px solid #374151;
-  background-color: #111827;
+  background-color: #0f172a;
   color: #f3f4f6;
   outline: none;
 }
@@ -133,67 +90,16 @@
 .users-input:focus,
 .users-select:focus {
   border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
 }
 
 .users-btn {
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 9px 13px;
+  border-radius: 10px;
   border: 1px solid transparent;
   color: #f8fafc;
   cursor: pointer;
   font-weight: 500;
-}
-
-.users-page input[type="checkbox"] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px;
-  max-width: 16px;
-  max-height: 16px;
-  aspect-ratio: 1 / 1;
-  padding: 0;
-  border: 1px solid #4b5563;
-  border-radius: 4px;
-  background: #1f2937;
-  display: inline-grid;
-  place-content: center;
-  margin: 0;
-  vertical-align: middle;
-  flex: 0 0 16px;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.users-page input[type="checkbox"]::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  transform: scale(0);
-  transition: transform 0.12s ease-in-out;
-  clip-path: polygon(14% 44%, 0 59%, 44% 100%, 100% 23%, 84% 9%, 43% 62%);
-  background: #f8fafc;
-}
-
-.users-page input[type="checkbox"]:checked {
-  background: #3b82f6;
-  border-color: #3b82f6;
-}
-
-.users-page input[type="checkbox"]:checked::before {
-  transform: scale(1);
-}
-
-.users-page input[type="checkbox"]:hover {
-  border-color: #60a5fa;
-}
-
-.users-page input[type="checkbox"]:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.35);
 }
 
 .users-btn-primary {
@@ -223,11 +129,221 @@
   background-color: #b91c1c;
 }
 
+.users-inline-btn {
+  align-self: flex-start;
+}
+
+.users-alert {
+  margin-bottom: 0;
+}
+
+.users-management-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.95fr) minmax(0, 1.3fr);
+  gap: 16px;
+}
+
+.users-list-card,
+.users-detail-card {
+  min-height: 540px;
+}
+
+.users-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 620px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.users-list-row {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(71, 85, 105, 0.55);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #0f172a;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.users-list-row:hover {
+  border-color: #3b82f6;
+  background: rgba(30, 41, 59, 0.95);
+  transform: translateY(-1px);
+}
+
+.users-list-row.is-selected {
+  border-color: #60a5fa;
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.16), rgba(15, 23, 42, 0.96));
+  box-shadow: inset 2px 0 0 #60a5fa;
+}
+
+.users-list-main,
+.users-main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.users-email {
+  font-weight: 600;
+  color: #f8fafc;
+  word-break: break-word;
+}
+
+.users-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.users-list-main {
+  flex: 1;
+}
+
+.users-list-aside {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.users-list-meta,
+.users-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
+.users-detail-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.65);
+}
+
+.users-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.users-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.users-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.users-field label {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.users-toggle-field {
+  justify-content: center;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  background: rgba(30, 41, 59, 0.4);
+}
+
+.users-inline-note {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  background: rgba(234, 179, 8, 0.08);
+  color: #fde68a;
+  font-size: 0.84rem;
+}
+
+.users-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.users-acl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.users-acl-row,
+.users-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background-color: #0f172a;
+  color: #f3f4f6;
+  border: 1px solid rgba(51, 65, 85, 0.75);
+}
+
+.users-acl-row {
+  flex-wrap: nowrap;
+}
+
+.users-acl-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.users-acl-main .users-email {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.users-acl-meta {
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.users-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .users-badge {
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 0.75rem;
   border: 1px solid transparent;
+}
+
+.users-badge-role {
+  background: rgba(59, 130, 246, 0.14);
+  color: #bfdbfe;
+  border-color: rgba(59, 130, 246, 0.35);
 }
 
 .users-badge-ok {
@@ -236,39 +352,16 @@
   border-color: rgba(22, 163, 74, 0.5);
 }
 
+.users-badge-neutral {
+  background: rgba(100, 116, 139, 0.18);
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
 .users-badge-pending {
   background: rgba(234, 179, 8, 0.14);
   color: #fde68a;
   border-color: rgba(234, 179, 8, 0.4);
-}
-
-.users-alert {
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 0.9rem;
-}
-
-.users-alert p {
-  margin: 6px 0;
-}
-
-.users-alert-success {
-  border: 1px solid rgba(22, 163, 74, 0.45);
-  background: rgba(22, 163, 74, 0.12);
-  color: #bbf7d0;
-}
-
-.users-alert-error {
-  border: 1px solid rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca;
-}
-
-.users-code {
-  background: #0f172a;
-  padding: 3px 6px;
-  border-radius: 6px;
-  border: 1px solid #334155;
 }
 
 .users-empty {
@@ -277,15 +370,75 @@
   font-size: 0.9rem;
 }
 
+.users-danger-zone {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(220, 38, 38, 0.32);
+  background: rgba(127, 29, 29, 0.14);
+}
+
 .loading {
   text-align: center;
   font-size: 18px;
   margin-top: 40px;
 }
 
-@media (max-width: 840px) {
-  .users-invite-grid {
+.users-list::-webkit-scrollbar,
+.users-acl-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.users-list::-webkit-scrollbar-track,
+.users-acl-list::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+  border-radius: 999px;
+}
+
+.users-list::-webkit-scrollbar-thumb,
+.users-acl-list::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.95);
+  border-radius: 999px;
+  border: 2px solid rgba(15, 23, 42, 0.6);
+}
+
+.users-list::-webkit-scrollbar-thumb:hover,
+.users-acl-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(96, 165, 250, 0.65);
+}
+
+@media (max-width: 1040px) {
+  .users-management-layout {
     grid-template-columns: 1fr;
+  }
+
+  .users-list-card,
+  .users-detail-card {
+    min-height: auto;
+  }
+}
+
+@media (max-width: 840px) {
+  .users-invite-grid,
+  .users-acl-form,
+  .users-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .users-detail-hero,
+  .users-danger-zone,
+  .users-row,
+  .users-acl-row,
+  .users-list-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .users-list-aside {
+    justify-content: flex-start;
   }
 
   .users-actions {

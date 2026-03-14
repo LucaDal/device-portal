@@ -18,6 +18,10 @@
     text-align: center;
 }
 
+.single-page-tabs {
+    max-width: 680px;
+}
+
 .single-page-header h1 {
     margin-bottom: 0.25rem;
 }
@@ -36,4 +40,128 @@
 .single-page-card {
     width: 100%;
     max-width: 680px;
+}
+
+.settings-page {
+    gap: 1.1rem;
+}
+
+.settings-hero {
+    max-width: 760px;
+}
+
+.settings-eyebrow {
+    display: inline-flex;
+    align-self: center;
+    padding: 0.28rem 0.65rem;
+    border-radius: 999px;
+    border: 1px solid rgba(96, 165, 250, 0.22);
+    background: rgba(37, 99, 235, 0.08);
+    color: #bfdbfe;
+    font-size: 0.76rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.settings-role-chips {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+}
+
+.single-page-tabs {
+    max-width: 760px;
+}
+
+.settings-tab {
+    display: grid;
+    gap: 0.12rem;
+    justify-items: start;
+    text-align: left;
+    align-content: start;
+}
+
+.settings-tab-title {
+    font-size: 0.92rem;
+    font-weight: 600;
+}
+
+.settings-tab-copy {
+    font-size: 0.74rem;
+    color: #94a3b8;
+    opacity: 1;
+}
+
+.settings-panel {
+    max-width: 760px;
+    padding: 1.35rem 1.45rem;
+}
+
+.settings-section-copy {
+    margin-top: 0.2rem;
+}
+
+.settings-stack {
+    gap: 1rem;
+}
+
+.settings-group {
+    border: 1px solid rgba(71, 85, 105, 0.55);
+    border-radius: 1rem;
+    padding: 1rem;
+    background:
+        linear-gradient(180deg, rgba(30, 41, 59, 0.42), rgba(17, 24, 39, 0.58)),
+        #111827;
+}
+
+.settings-group-header {
+    margin-bottom: 0.9rem;
+}
+
+.settings-group-header h3 {
+    margin: 0 0 0.22rem;
+    font-size: 0.98rem;
+    color: #f8fafc;
+}
+
+.settings-group-header p {
+    margin: 0;
+}
+
+.settings-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem 1rem;
+}
+
+.settings-span-full {
+    grid-column: 1 / -1;
+}
+
+.settings-highlight-row {
+    display: grid;
+    gap: 0.32rem;
+    margin-bottom: 0.95rem;
+    padding: 0.85rem 0.95rem;
+    border-radius: 0.9rem;
+    border: 1px solid rgba(96, 165, 250, 0.24);
+    background: linear-gradient(180deg, rgba(37, 99, 235, 0.08), rgba(15, 23, 42, 0.18));
+}
+
+.settings-highlight-row p {
+    margin: 0;
+}
+
+.settings-actions {
+    display: flex;
+    justify-content: flex-start;
+    padding-top: 0.2rem;
+}
+
+@media (max-width: 720px) {
+    .settings-form-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }

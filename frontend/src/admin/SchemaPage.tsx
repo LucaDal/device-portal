@@ -3,18 +3,27 @@ import { getSchema, updateSchema } from "./adminService";
 
 export const SchemaPage: React.FC = () => {
   const [schema, setSchema] = useState<any>(null);
+  const [schemaText, setSchemaText] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getSchema().then(setSchema).catch(err => setError(err.error || "Error"));
+    getSchema()
+      .then((loadedSchema) => {
+        setSchema(loadedSchema);
+        setSchemaText(JSON.stringify(loadedSchema, null, 2));
+      })
+      .catch((err) => setError(err.error || "Error"));
   }, []);
 
   const handleSave = async () => {
     try {
-      await updateSchema(schema);
+      setError(null);
+      const parsed = JSON.parse(schemaText);
+      await updateSchema(parsed);
+      setSchema(parsed);
       alert("Schema salvato");
     } catch (err: any) {
-      setError(err.error || "Save error");
+      setError(err?.error || "JSON non valido o save error");
     }
   };
 
@@ -25,8 +34,8 @@ export const SchemaPage: React.FC = () => {
       <textarea
         rows={20}
         cols={80}
-        value={JSON.stringify(schema, null, 2)}
-        onChange={e => setSchema(JSON.parse(e.target.value))}
+        value={schemaText}
+        onChange={(e) => setSchemaText(e.target.value)}
       />
       <button onClick={handleSave}>Save</button>
     </div>

@@ -1,61 +1,85 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import { User } from "@shared/types/user";
+import { loadCurrentUser, logout as apiLogout } from "./authService";
+import { navigateTo } from "../utils/navigation";
 
 interface AuthContextType {
   user: User | null;
-  token: string | null;
-  login: (user: User, token: string) => void;
+  loading: boolean;
+  login: (user: User) => void;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function readAuthFromStorage(): { user: User | null; token: string | null } {
+function readAuthFromStorage(): { user: User | null } {
   if (typeof window === "undefined") {
-    return { user: null, token: null };
+    return { user: null };
   }
   const storedUser = localStorage.getItem("user");
-  const storedToken = localStorage.getItem("token");
-  if (!storedUser || storedUser === "undefined" || storedUser === "null" || !storedToken) {
-    return { user: null, token: null };
+  if (!storedUser || storedUser === "undefined" || storedUser === "null") {
+    return { user: null };
   }
   try {
     const parsedUser = JSON.parse(storedUser) as User;
-    if (!parsedUser) return { user: null, token: null };
-    return { user: parsedUser, token: storedToken };
+    if (!parsedUser) return { user: null };
+    return { user: parsedUser };
   } catch {
     localStorage.removeItem("user");
-    localStorage.removeItem("token");
-    return { user: null, token: null };
+    return { user: null };
   }
 }
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [{ user: initialUser, token: initialToken }] = useState(readAuthFromStorage);
+  const [{ user: initialUser }] = useState(readAuthFromStorage);
   const [user, setUser] = useState<User | null>(initialUser);
-  const [token, setToken] = useState<string | null>(initialToken);
+  const [loading, setLoading] = useState(true);
 
-    const login = (u: User, t: string) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    async function syncUserFromSession() {
+      try {
+        const ret = await loadCurrentUser();
+        if (cancelled) return;
+        localStorage.setItem("user", JSON.stringify(ret.user));
+        setUser(ret.user);
+      } catch {
+        if (cancelled) return;
+        localStorage.removeItem("user");
+        setUser(null);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void syncUserFromSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+    const login = (u: User) => {
         try{
             localStorage.setItem("user", JSON.stringify(u));
-            localStorage.setItem("token", t);
         }catch(e){
             console.error("Error while setting localStorage:", e);
         }
         setUser(u);
-        setToken(t);
     };
 
   const logout = () => {
-    localStorage.removeItem("user");
-    localStorage.removeItem("token");
-    setUser(null);
-    setToken(null);
-    window.location.href = "/login";
+    void apiLogout().catch(() => undefined).finally(() => {
+      localStorage.removeItem("user");
+      setUser(null);
+      navigateTo("/login");
+    });
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -1,4 +1,9 @@
 import { AUTH_ERROR_CODES } from "@shared/constants/auth";
+import { navigateTo } from "../utils/navigation";
+
+type ApiFetchOptions = RequestInit & {
+    suppressUnauthorizedRedirect?: boolean;
+};
 
 const getDefaultApiBase = () => {
     if (typeof window === "undefined") {
@@ -16,28 +21,27 @@ const API_BASE = getDefaultApiBase().replace(/\/$/, "");
 
 const handleUnauthorized = () => {
     localStorage.removeItem("user");
-    localStorage.removeItem("token");
-    // Hard redirect to force full reset of app state
-    window.location.href = "/login";
+    navigateTo("/login");
 };
 
-export async function apiFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(url: string, options: ApiFetchOptions = {}): Promise<T> {
+    const { suppressUnauthorizedRedirect = false, ...requestOptions } = options;
     const mergedHeaders: HeadersInit = {
         "Content-Type": "application/json",
-        ...(options.headers || {})
+        ...(requestOptions.headers || {})
     };
     const res = await fetch(`${API_BASE}${url}`, {
-        ...options,
+        ...requestOptions,
         headers: mergedHeaders,
         credentials: "include",
     });
     if (!res.ok) {
-        if (res.status === 401) {
+        if (res.status === 401 && !suppressUnauthorizedRedirect) {
             handleUnauthorized();
         }
         const err = await res.json();
         if (res.status === 403 && err?.code === AUTH_ERROR_CODES.PASSWORD_CHANGE_REQUIRED) {
-            window.location.href = "/change-password";
+            navigateTo("/change-password");
         }
         console.error(err);
         return Promise.reject(err);
@@ -46,22 +50,11 @@ export async function apiFetch<T>(url: string, options: RequestInit = {}): Promi
     return (payload as T) as T;
 }
 
-export async function apiFetchWithAuth<T>(url: string, options: RequestInit = {}): Promise<T> {
-    const mergedHeaders: HeadersInit = {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${localStorage.getItem("token")}`,
-        ...(options.headers || {})
-    };
-    return await apiFetch<T>(url, {
-        headers: mergedHeaders,
-        ...options
-    });
+export async function apiFetchWithAuth<T>(url: string, options: ApiFetchOptions = {}): Promise<T> {
+    return await apiFetch<T>(url, options);
 }
 export async function apiFetchFD(url: string, method: string, data?: FormData | null): Promise<Response> {
     const options: RequestInit = {
-        headers: {
-            "Authorization": `Bearer ${localStorage.getItem("token")}`
-        },
         method,
         credentials: "include",
     };

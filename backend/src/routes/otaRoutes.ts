@@ -8,9 +8,7 @@ import {
     requireDeviceTypeSecretOrAdminBasic,
     requireDeviceTypeIdHeader,
 } from "../middleware/openRequestAuth";
-
-import multer from "multer";
-const upload = multer();
+import { singleUpload } from "../middleware/upload";
 const router = Router();
 
 router.get("/properties", requireDeviceCodeSecret, OtaController.getProperties);
@@ -21,7 +19,7 @@ router.post(
     basicAuthMiddleware,
     adminOnly,
     requireDeviceTypeIdHeader,
-    upload.single("file"),
+    singleUpload("file"),
     OtaController.UploadNewBuild
 );
 

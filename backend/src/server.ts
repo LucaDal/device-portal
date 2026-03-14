@@ -9,6 +9,8 @@ import otaRoutes from "./routes/otaRoutes";
 import mqttRoutes from "./routes/mqttRoutes";
 import "./config/database"; // inizializza DB
 import { User } from "@shared/types/user";
+import { securityHeadersMiddleware } from "./middleware/securityHeaders";
+import { sensitiveIpRateLimitMiddleware } from "./middleware/rateLimit";
 
 declare global {
   namespace Express {
@@ -23,6 +25,7 @@ declare global {
 }
 
 const app = express();
+app.set("trust proxy", 1);
 
 const ENABLE_REQUEST_LOGS = process.env.ENABLE_REQUEST_LOGS !== "false";
 const ALLOWED_CORS_ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "")
@@ -31,6 +34,7 @@ const ALLOWED_CORS_ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "")
   .filter(Boolean);
 
 // CORS allowlist: only configured frontend origins are allowed cross-origin.
+app.use(securityHeadersMiddleware);
 app.use((req, res, next) => {
   const origin = req.headers.origin as string | undefined;
   const originAllowed = origin ? ALLOWED_CORS_ORIGINS.includes(origin) : true;
@@ -69,8 +73,8 @@ if (ENABLE_REQUEST_LOGS) {
 app.use("/auth", bodyParser.json(),  authRoutes);
 app.use("/manage", bodyParser.json(), managementRoutes);
 app.use("/devices", bodyParser.json(), deviceRoutes);
-app.use("/ota", otaRoutes);
+app.use("/ota", sensitiveIpRateLimitMiddleware, otaRoutes);
 app.use("/device-types", deviceTypeRoutes);
-app.use("/mqtt", bodyParser.json(), mqttRoutes);
+app.use("/mqtt", bodyParser.json(), sensitiveIpRateLimitMiddleware, mqttRoutes);
 
 app.listen(3000, () => console.log("Server running on port 3000"));

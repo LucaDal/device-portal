@@ -4,6 +4,17 @@ import { generateToken } from "../utils/jwt";
 import { UserWithPassword } from "@shared/types/user";
 import { UsersController } from "./usersController";
 import { ROLES, Role } from "@shared/constants/auth";
+import { clearAuthCookie, setAuthCookie } from "../utils/authCookie";
+
+function toPublicUser(row: UserWithPassword) {
+    return {
+        id: row.id,
+        email: row.email,
+        role: row.role,
+        must_change_password: row.must_change_password ?? 0,
+        created_at: row.created_at,
+    };
+}
 
 export const AuthController = {
 
@@ -84,15 +95,8 @@ export const AuthController = {
             `).run(normalizedEmail);
         })();
 
-        const publicUser = {
-            id: row.id,
-            email: row.email,
-            role: row.role,
-            must_change_password: row.must_change_password ?? 0,
-            created_at: row.created_at,
-        };
-
-        res.send({ token: generateToken(row), user: publicUser });
+        setAuthCookie(req, res, generateToken(row));
+        res.send({ user: toPublicUser(row) });
     },
 
     changePassword: async (req: any, res: any) => {
@@ -138,5 +142,27 @@ export const AuthController = {
             console.error(err);
             return res.status(500).send({ error: "Failed to change password" });
         }
+    },
+
+    me: async (req: any, res: any) => {
+        const userId = Number((req.user as any)?.id);
+        if (!userId) {
+            return res.status(401).send({ error: "Missing token" });
+        }
+
+        const row = DB.prepare(
+            "SELECT id, email, role, must_change_password, created_at FROM users WHERE id = ?"
+        ).get(userId) as UserWithPassword | undefined;
+
+        if (!row) {
+            return res.status(401).send({ error: "Invalid token user" });
+        }
+
+        return res.send({ user: toPublicUser(row) });
+    },
+
+    logout: async (req: any, res: any) => {
+        clearAuthCookie(req, res);
+        return res.send({ ok: true });
     },
 };

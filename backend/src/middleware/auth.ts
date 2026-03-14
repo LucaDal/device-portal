@@ -1,26 +1,27 @@
 import type { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
 import { DB } from "../config/database";
 import { AUTH_ERROR_CODES, Role } from "@shared/constants/auth";
 import { User } from "@shared/types/user";
+import { readAuthToken } from "../utils/authCookie";
+import { verifyToken } from "../utils/jwt";
 
-const JWT_SECRET = process.env.JWT_SECRET || "cambiami_subito";
-
-export function authMiddleware(req: Request, res: Response, next: NextFunction) {
+function readBearerToken(req: Request): string | null {
   const header = req.headers.authorization;
-  if (!header) return res.status(401).send({ error: "Missing token" });
-
-  if (!header.startsWith("Bearer ")) {
-    return res.status(401).send({ error: "Invalid token" });
-  }
+  if (!header) return null;
+  if (!header.startsWith("Bearer ")) return null;
 
   const token = header.slice(7).trim();
+  return token || null;
+}
+
+export function authMiddleware(req: Request, res: Response, next: NextFunction) {
+  const token = readAuthToken(req) || readBearerToken(req);
   if (!token) {
-    return res.status(401).send({ error: "Invalid token" });
+    return res.status(401).send({ error: "Missing token" });
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { id?: number };
+    const decoded = verifyToken(token);
     if (!decoded?.id) {
       return res.status(401).send({ error: "Invalid token" });
     }

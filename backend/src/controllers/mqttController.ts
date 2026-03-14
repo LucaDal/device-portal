@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import fs from "fs";
 import { spawn } from "child_process";
 import { DB } from "../config/database";
 import {
@@ -9,6 +10,7 @@ import {
 } from "@shared/constants/mqtt";
 import { ROLES } from "@shared/constants/auth";
 import { MqttBrokerSettings, MqttPublishInput } from "@shared/types/mqtt_publish";
+import { getMqttHttpAuthSecret } from "../config/secrets";
 
 type AclRule = {
     action: MqttAclAction;
@@ -18,22 +20,15 @@ type AclRule = {
 };
 
 const MQTT_SETTINGS_KEY = "mqtt_broker_settings";
+const MQTT_HTTP_AUTH_SECRET = getMqttHttpAuthSecret();
 
 function compareSharedSecret(req: any): boolean {
-    const configured = process.env.MQTT_HTTP_AUTH_SECRET;
-    if (!configured) return true;
-
-    const fromHeader =
-        req.headers["x-emqx-auth-secret"] ||
-        req.headers["x-mqtt-auth-secret"] ||
-        "";
-    const bearer = String(req.headers.authorization || "");
-    const fromBearer = bearer.startsWith("Bearer ") ? bearer.slice(7) : "";
-    const provided = String(fromHeader || fromBearer || "");
-    if (!provided || provided.length !== configured.length) {
+    const rawHeader = req.headers["x-mqtt-auth-secret"];
+    const provided = String(Array.isArray(rawHeader) ? rawHeader[0] : rawHeader || "");
+    if (!provided || provided.length !== MQTT_HTTP_AUTH_SECRET.length) {
         return false;
     }
-    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(configured));
+    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(MQTT_HTTP_AUTH_SECRET));
 }
 
 function getClientId(payload: any): string {
@@ -127,9 +122,35 @@ function loadBrokerSettings(): MqttBrokerSettings | null {
             username: String(parsed.username || ""),
             password: String(parsed.password || ""),
             clientIdPrefix: String(parsed.clientIdPrefix || "device-portal-api"),
+            allowInsecureTls: parsed.allowInsecureTls === true,
+            caFile: String(parsed.caFile || ""),
+            clientCertFile: String(parsed.clientCertFile || ""),
+            clientKeyFile: String(parsed.clientKeyFile || ""),
         };
     } catch {
         return null;
+    }
+}
+
+function ensureReadableFile(pathValue: string, label: string) {
+    if (!pathValue) {
+        throw new Error(`${label} is required`);
+    }
+    fs.accessSync(pathValue, fs.constants.R_OK);
+}
+
+function validateBrokerTlsSettings(settings: MqttBrokerSettings) {
+    if (settings.protocol !== "mqtts") {
+        return;
+    }
+
+    if (!settings.allowInsecureTls) {
+        ensureReadableFile(settings.caFile, "CA file");
+    }
+
+    if (settings.clientCertFile || settings.clientKeyFile) {
+        ensureReadableFile(settings.clientCertFile, "Client certificate file");
+        ensureReadableFile(settings.clientKeyFile, "Client key file");
     }
 }
 
@@ -163,7 +184,6 @@ function normalizePublishInput(req: any): MqttPublishInput | null {
 
 function canUserPublishTopic(userId: number, role: string, topic: string): boolean {
     if (!userId || !topic) return false;
-    if (role === ROLES.ADMIN) return true;
 
     const permission = DB.prepare(
         "SELECT enabled FROM mqtt_publish_permissions WHERE user_id = ?"
@@ -192,6 +212,8 @@ async function publishMqttMessage(
     topic: string,
     payload: string
 ): Promise<void> {
+    validateBrokerTlsSettings(settings);
+
     await new Promise<void>((resolve, reject) => {
         const args: string[] = [
             "-h",
@@ -213,9 +235,15 @@ async function publishMqttMessage(
             args.push("-P", settings.password);
         }
         if (settings.protocol === "mqtts") {
-            args.push("--insecure");
+            if (settings.allowInsecureTls) {
+                args.push("--insecure");
+            } else {
+                args.push("--cafile", settings.caFile);
+            }
+            if (settings.clientCertFile && settings.clientKeyFile) {
+                args.push("--cert", settings.clientCertFile, "--key", settings.clientKeyFile);
+            }
         }
-
         const proc = spawn("mosquitto_pub", args);
         let stderr = "";
 

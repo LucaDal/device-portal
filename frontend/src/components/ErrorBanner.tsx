@@ -1,40 +1,48 @@
-import { useEffect, useState } from "react";
 import "../style/ErrorBanner.css";
 
 type ErrorBannerProps = {
     message?: string | null;
+    variant?: "error" | "success" | "info";
+    className?: string;
     inlineClassName?: string;
+    title?: string;
 };
 
 const ErrorBanner: React.FC<ErrorBannerProps> = ({
     message,
-    inlineClassName = "dt-alert dt-alert-error",
+    variant = "error",
+    className = "",
+    inlineClassName = "",
+    title,
 }) => {
-    const [overlayDismissed, setOverlayDismissed] = useState(false);
-
-    useEffect(() => {
-        setOverlayDismissed(false);
-    }, [message]);
+    const resolvedTitle =
+        title || (variant === "success" ? "Success" : variant === "info" ? "Info" : "Attention");
+    const alertClassName = [
+        "dt-alert",
+        variant === "success" ? "dt-alert-success" : variant === "info" ? "dt-alert-info" : "dt-alert-error",
+        "app-banner",
+        inlineClassName,
+        className,
+    ]
+        .filter(Boolean)
+        .join(" ");
 
     if (!message) return null;
 
     return (
-        <>
-            <div className={inlineClassName}>{message}</div>
-            {!overlayDismissed && (
-                <div className="error-overlay" role="alert" aria-live="assertive">
-                    <div className="error-overlay__text">{message}</div>
-                    <button
-                        type="button"
-                        className="error-overlay__close"
-                        onClick={() => setOverlayDismissed(true)}
-                        aria-label="Close error notification"
-                    >
-                        x
-                    </button>
-                </div>
-            )}
-        </>
+        <div
+            className={alertClassName}
+            role={variant === "error" ? "alert" : "status"}
+            aria-live={variant === "error" ? "assertive" : "polite"}
+        >
+            <span className="app-banner__icon" aria-hidden="true">
+                {variant === "success" ? "✓" : variant === "info" ? "i" : "!"}
+            </span>
+            <div className="app-banner__body">
+                <strong className="app-banner__title">{resolvedTitle}</strong>
+                <div className="app-banner__message">{message}</div>
+            </div>
+        </div>
     );
 };
 

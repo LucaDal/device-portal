@@ -20,11 +20,39 @@
 .dt-tabs {
     max-width: none;
     width: 100%;
-    margin: 0 0 1rem;
+    margin: 0 0 1.1rem;
     display: flex;
     gap: 0.5rem;
-    padding-bottom: 0.35rem;
+    padding-bottom: 0.25rem;
     border-bottom: 1px solid rgba(71, 85, 105, 0.45);
+}
+
+.dt-tabs .dt-btn {
+    flex: 0 1 auto;
+    min-width: 0;
+    border-radius: 0;
+    padding: 0.65rem 0.35rem 0.7rem;
+    background-color: transparent;
+    border-color: transparent;
+    border-bottom: 2px solid transparent;
+    justify-content: flex-start;
+}
+
+.dt-tabs .dt-btn:not(.dt-btn-primary) {
+    color: #cbd5e1;
+}
+
+.dt-tabs .dt-btn.dt-btn-primary {
+    background: rgba(37, 99, 235, 0.1);
+    color: #eff6ff;
+    border-color: transparent transparent #60a5fa transparent;
+    box-shadow: none;
+}
+
+.dt-tabs .dt-btn:hover:not(:disabled) {
+    background-color: transparent;
+    color: #eff6ff;
+    border-color: transparent transparent rgba(96, 165, 250, 0.45) transparent;
 }
 
 .dt-layout {
@@ -229,6 +257,72 @@
     background-color: rgba(22, 163, 74, 0.08);
     border: 1px solid rgba(22, 163, 74, 0.6);
     color: #bbf7d0;
+}
+
+.dt-alert-info {
+    background-color: rgba(37, 99, 235, 0.08);
+    border: 1px solid rgba(96, 165, 250, 0.55);
+    color: #bfdbfe;
+}
+
+.dt-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #d1d5db;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.dt-checkbox input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    min-height: 16px;
+    max-width: 16px;
+    max-height: 16px;
+    aspect-ratio: 1 / 1;
+    padding: 0;
+    border: 1px solid #4b5563;
+    border-radius: 4px;
+    background: #1f2937;
+    display: inline-grid;
+    place-content: center;
+    margin: 0;
+    vertical-align: middle;
+    flex: 0 0 16px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dt-checkbox input[type="checkbox"]::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    transform: scale(0);
+    transition: transform 0.12s ease-in-out;
+    clip-path: polygon(14% 44%, 0 59%, 44% 100%, 100% 23%, 84% 9%, 43% 62%);
+    background: #f8fafc;
+}
+
+.dt-checkbox input[type="checkbox"]:checked {
+    background: #3b82f6;
+    border-color: #3b82f6;
+}
+
+.dt-checkbox input[type="checkbox"]:checked::before {
+    transform: scale(1);
+}
+
+.dt-checkbox input[type="checkbox"]:hover {
+    border-color: #60a5fa;
+}
+
+.dt-checkbox input[type="checkbox"]:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.35);
 }
 
 .dt-chip {

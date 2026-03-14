@@ -7,6 +7,10 @@ export interface MqttBrokerSettings {
     username: string;
     password: string;
     clientIdPrefix: string;
+    allowInsecureTls: boolean;
+    caFile: string;
+    clientCertFile: string;
+    clientKeyFile: string;
 }
 
 export interface MqttPublishInput {

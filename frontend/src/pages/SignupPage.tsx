@@ -4,6 +4,7 @@ import { signup as apiSignup, login as apiLogin} from "../auth/authService";
 import ErrorBanner from "../components/ErrorBanner";
 import "../style/auth.css"
 import { ROLES, Role } from "@shared/constants/auth";
+import { navigateTo } from "../utils/navigation";
 
 export default function SignupPage() {
     const { login } = useAuth();
@@ -42,7 +43,7 @@ export default function SignupPage() {
         try {
             console.log(email, password);
             await apiSignup({ email, password, role});
-            window.location.href = "/";
+            navigateTo("/");
         } catch (err: any) {
             setError(err?.error || "Sign upon failed");
             setIsSubmitting(false);

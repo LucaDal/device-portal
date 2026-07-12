@@ -2,6 +2,7 @@ import { DB } from "../config/database";
 import crypto from "crypto";
 import { SavedProperties } from "@shared/types/properties";
 import { decryptSensitiveDeviceProperties } from "../utils/devicePropertiesSecurity";
+import { mapDeviceTypeMqttTopicsToProperties } from "../utils/deviceTypeMqtt";
 
 type OtaProperties = Record<string, string | number | boolean>;
 
@@ -53,7 +54,12 @@ export const OtaController = {
                  LEFT JOIN device_properties dp ON dp.device_code = d.code
                  LEFT JOIN device_types dt ON dt.id = d.device_type_id
                  WHERE d.code = ?`
-            ).get(dev_code) as { device_properties?: string; generic_properties?: string } | undefined;
+            ).get(dev_code) as
+                | {
+                    device_properties?: string;
+                    generic_properties?: string;
+                }
+                | undefined;
             if (!data) {
                 return res.status(400).json({ error: "Device not found" });
             }
@@ -61,7 +67,8 @@ export const OtaController = {
             const genericProps = parseSavedProperties(data.generic_properties);
             const savedProps = decryptSensitiveDeviceProperties(parseSavedProperties(data.device_properties));
             const merged = { ...genericProps, ...savedProps };
-            const otaProps = mapToOtaProperties(merged);
+            const mqttProps = mapDeviceTypeMqttTopicsToProperties(dev_code);
+            const otaProps = { ...mapToOtaProperties(merged), ...mqttProps };
             res.json(otaProps);
         } catch (err) {
             console.error("Error loading OTA properties", err);

@@ -45,6 +45,8 @@ DB.exec(`
         firmware_build BLOB NOT NULL,
         deviceProperties TEXT,
         genericProperties TEXT,
+        mqttTopics TEXT,
+        dashboardWidgets TEXT,
         description TEXT
     );
 
@@ -80,7 +82,6 @@ DB.exec(`
     CREATE TABLE IF NOT EXISTS device_shares (
         device_code TEXT NOT NULL,
         user_id INTEGER NOT NULL,
-        can_write INTEGER NOT NULL DEFAULT 0,
         shared_by INTEGER NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY(device_code, user_id),
@@ -93,7 +94,6 @@ DB.exec(`
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         device_code TEXT NOT NULL,
         email TEXT NOT NULL,
-        can_write INTEGER NOT NULL DEFAULT 0,
         invitation_token TEXT NOT NULL UNIQUE,
         invited_by INTEGER NOT NULL,
         expires_at DATETIME NOT NULL,
@@ -110,6 +110,8 @@ DB.exec(`
         topic_pattern TEXT NOT NULL,
         permission TEXT NOT NULL DEFAULT 'allow',
         priority INTEGER NOT NULL DEFAULT 100,
+        source TEXT DEFAULT 'manual',
+        source_key TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(device_code) REFERENCES devices(code) ON DELETE CASCADE
     );
@@ -120,24 +122,18 @@ DB.exec(`
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE TABLE IF NOT EXISTS mqtt_publish_permissions (
-        user_id INTEGER PRIMARY KEY,
-        enabled INTEGER NOT NULL DEFAULT 0,
-        updated_by INTEGER,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS mqtt_publish_acl_rules (
+    CREATE TABLE IF NOT EXISTS mqtt_user_acl_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
         topic_pattern TEXT NOT NULL,
         permission TEXT NOT NULL DEFAULT 'allow',
-        priority INTEGER NOT NULL DEFAULT 100,
+        source TEXT NOT NULL DEFAULT 'generated',
+        source_device_code TEXT,
+        source_key TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(source_device_code) REFERENCES devices(code) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_device_share_invitations_lookup
@@ -149,8 +145,8 @@ DB.exec(`
     CREATE INDEX IF NOT EXISTS idx_mqtt_acl_rules_device_priority
     ON mqtt_acl_rules(device_code, priority);
 
-    CREATE INDEX IF NOT EXISTS idx_mqtt_publish_acl_user_priority
-    ON mqtt_publish_acl_rules(user_id, priority);
+    CREATE INDEX IF NOT EXISTS idx_mqtt_user_acl_rules_user
+    ON mqtt_user_acl_rules(user_id, action);
 `);
 
 const userColumns = DB.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
@@ -163,6 +159,22 @@ if (!deviceColumns.some((c) => c.name === "device_secret_hash")) {
 }
 if (!deviceColumns.some((c) => c.name === "mqtt_enabled")) {
     DB.exec("ALTER TABLE devices ADD COLUMN mqtt_enabled INTEGER DEFAULT 1");
+}
+
+const deviceTypeColumns = DB.prepare("PRAGMA table_info(device_types)").all() as Array<{ name: string }>;
+if (!deviceTypeColumns.some((c) => c.name === "mqttTopics")) {
+    DB.exec("ALTER TABLE device_types ADD COLUMN mqttTopics TEXT DEFAULT '[]'");
+}
+if (!deviceTypeColumns.some((c) => c.name === "dashboardWidgets")) {
+    DB.exec("ALTER TABLE device_types ADD COLUMN dashboardWidgets TEXT DEFAULT '[]'");
+}
+
+const mqttAclColumns = DB.prepare("PRAGMA table_info(mqtt_acl_rules)").all() as Array<{ name: string }>;
+if (!mqttAclColumns.some((c) => c.name === "source")) {
+    DB.exec("ALTER TABLE mqtt_acl_rules ADD COLUMN source TEXT DEFAULT 'manual'");
+}
+if (!mqttAclColumns.some((c) => c.name === "source_key")) {
+    DB.exec("ALTER TABLE mqtt_acl_rules ADD COLUMN source_key TEXT");
 }
 
 ensureAdminUser();

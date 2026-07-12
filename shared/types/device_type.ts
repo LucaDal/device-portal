@@ -5,4 +5,6 @@ export interface DeviceType {
     created_at: string;
     deviceProperties?: string;
     genericProperties?: string;
+    mqttTopics?: string;
+    dashboardWidgets?: string;
 }

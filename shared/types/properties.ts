@@ -9,14 +9,23 @@ export interface PropertyRow {
     key: string;
     type: PropertyType;
     sensitive?: boolean;
+    visible?: boolean;
+    mqtt?: DevicePropertyMqttConfig;
 }
 
 export interface DevicePropertyDefinition {
     type: PropertyType;
     sensitive?: boolean;
+    visible?: boolean;
+    mqtt?: DevicePropertyMqttConfig;
 }
 
 export type DevicePropertyMap = Record<string, DevicePropertyDefinition>;
+
+export interface DevicePropertyMqttConfig {
+    publishTopic?: string;
+    subscribeTopic?: string;
+}
 
 // Struttura salvata nel DB per ogni proprietà del *device*:
 // {
@@ -42,15 +51,43 @@ export function isPropertyType(value: unknown): value is PropertyType {
 
 export function normalizeDevicePropertyDefinition(value: unknown): DevicePropertyDefinition | null {
     if (typeof value === "string" && isPropertyType(value)) {
-        return { type: value, sensitive: false };
+        return { type: value, sensitive: false, visible: true };
     }
     if (value && typeof value === "object" && !Array.isArray(value)) {
         const rawType = (value as any).type;
         if (!isPropertyType(rawType)) return null;
         const sensitive = rawType === PropertyType.STRING && Boolean((value as any).sensitive);
-        return { type: rawType, sensitive };
+        const visible = (value as any).visible !== false;
+        const rawMqtt = (value as any).mqtt;
+        const mqtt = normalizeDevicePropertyMqttConfig(rawMqtt);
+        return {
+            type: rawType,
+            sensitive,
+            visible,
+            ...(mqtt ? { mqtt } : {}),
+        };
     }
     return null;
+}
+
+export function normalizeMqttTopicTemplate(value: unknown): string {
+    return String(value || "")
+        .trim()
+        .replace(/^\/+/, "")
+        .replace(/\/+$/, "");
+}
+
+export function normalizeDevicePropertyMqttConfig(raw: unknown): DevicePropertyMqttConfig | undefined {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+
+    const publishTopic = normalizeMqttTopicTemplate((raw as any).publishTopic);
+    const subscribeTopic = normalizeMqttTopicTemplate((raw as any).subscribeTopic);
+    if (!publishTopic && !subscribeTopic) return undefined;
+
+    return {
+        ...(publishTopic ? { publishTopic } : {}),
+        ...(subscribeTopic ? { subscribeTopic } : {}),
+    };
 }
 
 export function parseDevicePropertyMap(raw: unknown): DevicePropertyMap {

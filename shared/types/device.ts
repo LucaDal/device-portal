@@ -14,23 +14,23 @@ export interface DeviceWithRelations {
     owner_email?: string | null;
     activated: number; // 0/1
     is_shared?: number;
-    can_write?: number;
 
     device_type_description?: string | null;
     firmware_version?: string;
     type_deviceProperties?: string | Record<string, unknown> | null;
     type_genericProperties?: string | Record<string, unknown> | null;
+    type_mqttTopics?: string | Record<string, unknown>[] | null;
+    type_dashboardWidgets?: string | Record<string, unknown>[] | null;
     device_properties?: string | Record<string, unknown> | null;
 }
 
 export interface DeviceProvisioningResult extends DeviceWithRelations {
-    ota_secret: string;
+    secret_code: string;
 }
 
 export interface DeviceShareRow {
     device_code: string;
     user_id: number;
-    can_write: number;
     shared_by: number;
     created_at: string;
     user_email: string;
@@ -41,7 +41,6 @@ export interface DeviceShareInvitationRow {
     id: number;
     device_code: string;
     email: string;
-    can_write: number;
     invited_by: number;
     expires_at: string;
     accepted_at?: string | null;

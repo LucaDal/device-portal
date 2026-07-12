@@ -7,7 +7,7 @@ import {
 } from "@shared/types/device";
 import { DeviceType } from "@shared/types/device_type";
 import { MqttAclRule } from "@shared/types/mqtt";
-import { MqttAclAction, MqttAclPermission } from "@shared/constants/mqtt";
+import { MqttPublishInput } from "@shared/types/mqtt_publish";
 
 const DT_URL = "/device-types";
 
@@ -71,14 +71,13 @@ export async function getDeviceShares(deviceCode: string) {
 
 export async function shareDeviceByEmail(
     deviceCode: string,
-    payload: { email: string; canWrite?: boolean }
+    payload: { email: string }
 ) {
     return apiFetchWithAuth<{
         ok: boolean;
         mode: "shared" | "invited";
         deviceCode: string;
         email: string;
-        canWrite: number;
         userId?: number;
         expiresAt?: string;
     }>(`/devices/${encodeURIComponent(deviceCode)}/shares`, {
@@ -107,25 +106,10 @@ export async function getMqttAclRules(deviceCode: string): Promise<MqttAclRule[]
     });
 }
 
-export async function upsertMqttAclRule(
-    deviceCode: string,
-    payload: {
-        id?: number;
-        action: MqttAclAction;
-        topicPattern: string;
-        permission: MqttAclPermission;
-        priority: number;
-    }
-) {
-    return apiFetchWithAuth<{ ok: boolean; id: number }>(`/mqtt/admin/acl/${encodeURIComponent(deviceCode)}`, {
+export async function publishMqttWithSession(payload: MqttPublishInput) {
+    return apiFetchWithAuth<{ ok: boolean; topic: string; broker: string }>("/mqtt/session-publish", {
         method: "POST",
         body: JSON.stringify(payload),
-    });
-}
-
-export async function deleteMqttAclRule(id: number) {
-    return apiFetchWithAuth<{ ok: boolean }>(`/mqtt/admin/acl/rules/${id}`, {
-        method: "DELETE",
     });
 }
 
@@ -139,9 +123,9 @@ export async function revokeDeviceOwnership(payload: { deviceCode: string; owner
     );
 }
 
-export async function regenerateDeviceOtaSecret(code: string) {
-    return apiFetchWithAuth<{ ok: boolean; code: string; ota_secret: string }>(
-        `/devices/${encodeURIComponent(code)}/ota-secret/regenerate`,
+export async function regenerateDeviceSecretCode(code: string) {
+    return apiFetchWithAuth<{ ok: boolean; code: string; secret_code: string }>(
+        `/devices/${encodeURIComponent(code)}/secret-code/regenerate`,
         { method: "POST" }
     );
 }

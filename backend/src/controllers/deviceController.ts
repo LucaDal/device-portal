@@ -2,13 +2,18 @@ import { DB } from "../config/database";
 import crypto from "crypto";
 import { ROLES } from "@shared/constants/auth";
 import { DeviceProvisioningResult } from "@shared/types/device";
-import { SavedProperties } from "@shared/types/properties";
+import { DevicePropertyMap, SavedProperties } from "@shared/types/properties";
 import {
     decryptSensitiveDeviceProperties,
     encryptSensitiveDeviceProperties,
     parseTypePropertyDefinitions,
 } from "../utils/devicePropertiesSecurity";
 import { generateDeviceSecret, hashDeviceSecret } from "../utils/deviceSecrets";
+import { syncGeneratedMqttAclRulesForDevice } from "../utils/deviceTypeMqtt";
+import {
+    syncGeneratedMqttUserAclRulesForAllUsers,
+    syncGeneratedMqttUserAclRulesForUser,
+} from "../utils/mqttUserAcl";
 
 const SHARE_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -43,6 +48,59 @@ function isDeviceOwner(userId: number, deviceCode: string): boolean {
     return Boolean(owned);
 }
 
+function parseSavedProperties(raw: unknown): SavedProperties {
+    if (!raw) return {};
+    try {
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        return parsed as SavedProperties;
+    } catch {
+        return {};
+    }
+}
+
+function filterVisibleTypeDefinitions(raw: unknown): DevicePropertyMap {
+    const definitions = parseTypePropertyDefinitions(raw);
+    const visibleDefinitions: DevicePropertyMap = {};
+    for (const [key, definition] of Object.entries(definitions)) {
+        if (definition.visible !== false) {
+            visibleDefinitions[key] = definition;
+        }
+    }
+    return visibleDefinitions;
+}
+
+function filterPropertiesByDefinitions(
+    properties: SavedProperties,
+    definitions: DevicePropertyMap
+): SavedProperties {
+    const filtered: SavedProperties = {};
+    for (const key of Object.keys(definitions)) {
+        if (properties[key]) {
+            filtered[key] = properties[key];
+        }
+    }
+    return filtered;
+}
+
+function mergePropertiesForSchema(
+    currentProperties: SavedProperties,
+    nextProperties: SavedProperties,
+    schema: DevicePropertyMap
+): SavedProperties {
+    const merged: SavedProperties = {};
+    for (const key of Object.keys(schema)) {
+        if (nextProperties[key]) {
+            merged[key] = nextProperties[key];
+            continue;
+        }
+        if (currentProperties[key]) {
+            merged[key] = currentProperties[key];
+        }
+    }
+    return merged;
+}
+
 export const DeviceController = {
 
     // GET /devices
@@ -56,14 +114,12 @@ export const DeviceController = {
                 ou.email AS owner_email,
                 d.activated,
                 CASE WHEN ds.user_id IS NULL THEN 0 ELSE 1 END AS is_shared,
-                CASE
-                    WHEN d.owner_id = ? OR ? = '${ROLES.ADMIN}' THEN 1
-                    ELSE COALESCE(ds.can_write, 0)
-                END AS can_write,
                 dt.description AS device_type_description,
                 dt.firmware_version,
                 dt.deviceProperties AS type_deviceProperties,
                 dt.genericProperties AS type_genericProperties,
+                dt.mqttTopics AS type_mqttTopics,
+                dt.dashboardWidgets AS type_dashboardWidgets,
                 CASE
                     WHEN d.owner_id = ? THEN dp.properties
                     ELSE NULL
@@ -77,7 +133,7 @@ export const DeviceController = {
                AND ds.user_id = ?
         `;
 
-        const params: any[] = [userId, role, userId, userId];
+        const params: any[] = [userId, userId];
 
         if (role !== ROLES.ADMIN) {
             sql += ` WHERE d.owner_id = ? OR ds.user_id IS NOT NULL`;
@@ -90,20 +146,28 @@ export const DeviceController = {
         const rows = stmt.all(...params) as Array<any>;
 
         const sanitizedRows = rows.map((row) => {
-            if (!row?.device_properties) return row;
-            try {
-                const parsedProps = typeof row.device_properties === "string"
-                    ? JSON.parse(row.device_properties)
-                    : row.device_properties;
-                const decrypted = decryptSensitiveDeviceProperties(parsedProps as SavedProperties);
+            const visibleTypeDefinitions = filterVisibleTypeDefinitions(row?.type_deviceProperties);
+            const type_deviceProperties = JSON.stringify(visibleTypeDefinitions);
+            if (!row?.device_properties) {
                 return {
                     ...row,
+                    type_deviceProperties,
+                };
+            }
+            try {
+                const parsedProps = parseSavedProperties(row.device_properties);
+                const visibleProps = filterPropertiesByDefinitions(parsedProps, visibleTypeDefinitions);
+                const decrypted = decryptSensitiveDeviceProperties(visibleProps);
+                return {
+                    ...row,
+                    type_deviceProperties,
                     device_properties: JSON.stringify(decrypted),
                 };
             } catch (err) {
                 console.error("Failed to decode device properties for list()", err);
                 return {
                     ...row,
+                    type_deviceProperties,
                     device_properties: JSON.stringify({}),
                 };
             }
@@ -129,6 +193,8 @@ export const DeviceController = {
             return res.status(400).json({ message: "Device already activated" });
         }
         DB.prepare(`UPDATE devices SET owner_id = ?, activated = 1 WHERE code = ?`).run(userId, code);
+        syncGeneratedMqttAclRulesForDevice(code);
+        syncGeneratedMqttUserAclRulesForAllUsers();
         res.json({ ok: true });
     },
 
@@ -145,6 +211,7 @@ export const DeviceController = {
         if (info.changes === 0) {
             return res.status(400).send({ message: "No device to delete found" });
         }
+        syncGeneratedMqttUserAclRulesForAllUsers();
         res.send({ ok: true });
     },
 
@@ -182,6 +249,8 @@ export const DeviceController = {
             DB.prepare("DELETE FROM device_shares WHERE device_code = ?").run(deviceCode);
             DB.prepare("DELETE FROM device_share_invitations WHERE device_code = ?").run(deviceCode);
         })();
+        syncGeneratedMqttAclRulesForDevice(deviceCode);
+        syncGeneratedMqttUserAclRulesForAllUsers();
 
         return res.send({ ok: true, deviceCode, ownerEmail });
     },
@@ -228,6 +297,8 @@ VALUES (?, ?, ?, ?, ?)
 INSERT INTO device_properties (device_code, properties)
 VALUES (?, ?)
 `).run(code, "{}");
+            syncGeneratedMqttAclRulesForDevice(code);
+            syncGeneratedMqttUserAclRulesForAllUsers();
 
             const created = DB.prepare(`
 SELECT d.code, d.device_type_id, d.owner_id, u.email AS owner_email, d.activated
@@ -242,7 +313,7 @@ WHERE d.code = ?
 
             res.status(201).json({
                 ...created,
-                ota_secret: deviceSecret,
+                secret_code: deviceSecret,
             });
         } catch (e: any) {
             if (e.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || e.code === "SQLITE_CONSTRAINT_UNIQUE") {
@@ -252,7 +323,7 @@ WHERE d.code = ?
             res.status(500).json({ error: "Internal error" });
         }
     },
-    regenerateOtaSecret(req: any, res: any) {
+    regenerateSecretCode(req: any, res: any) {
         const code = String(req.params.code || "").trim();
         if (!code) {
             return res.status(400).send({ error: "Device code is required" });
@@ -273,7 +344,7 @@ WHERE d.code = ?
         return res.send({
             ok: true,
             code,
-            ota_secret: deviceSecret,
+            secret_code: deviceSecret,
         });
     },
     // PUT /devices/:code/properties
@@ -321,19 +392,21 @@ WHERE d.code = ?
         }
         const schema = parseTypePropertyDefinitions(deviceTypeRow.device_properties_schema);
 
+        const existingProps = DB.prepare(
+            "SELECT id, properties FROM device_properties WHERE device_code = ?"
+        ).get(code) as { id: number; properties?: string | null } | undefined;
+
         let propertiesJson = "{}";
         try {
+            const currentProps = parseSavedProperties(existingProps?.properties);
             const encryptedProps = encryptSensitiveDeviceProperties(parsedProperties, schema);
-            propertiesJson = JSON.stringify(encryptedProps);
+            const mergedProps = mergePropertiesForSchema(currentProps, encryptedProps, schema);
+            propertiesJson = JSON.stringify(mergedProps);
         } catch (err: any) {
             return res.status(500).json({
                 error: err?.message || "Failed to encrypt sensitive device properties",
             });
         }
-
-        const existingProps = DB.prepare(
-            "SELECT id FROM device_properties WHERE device_code = ?"
-        ).get(code);
 
         if (existingProps) {
             DB.prepare(`UPDATE device_properties
@@ -371,7 +444,6 @@ WHERE d.code = ?
             SELECT
                 ds.device_code,
                 ds.user_id,
-                ds.can_write,
                 ds.shared_by,
                 ds.created_at,
                 u.email AS user_email,
@@ -388,7 +460,6 @@ WHERE d.code = ?
                 dsi.id,
                 dsi.device_code,
                 dsi.email,
-                dsi.can_write,
                 dsi.invited_by,
                 dsi.expires_at,
                 dsi.accepted_at,
@@ -407,88 +478,87 @@ WHERE d.code = ?
 
     // POST /devices/:code/shares
     createShare(req: any, res: any) {
-        const { code } = req.params;
-        const { userId, role } = getCurrentUser(req);
-        if (!canManageSharesOrDelete(userId, role, code)) {
-            return res.status(403).send({ error: "Only device owner or admin can share this device" });
-        }
+        try {
+            const { code } = req.params;
+            const { userId, role } = getCurrentUser(req);
+            if (!canManageSharesOrDelete(userId, role, code)) {
+                return res.status(403).send({ error: "Only device owner or admin can share this device" });
+            }
 
-        const { email, canWrite } = req.body as { email?: string; canWrite?: boolean };
-        const normalizedEmail = normalizeEmail(email || "");
-        if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
-            return res.status(400).send({ error: "Invalid email" });
-        }
+            const { email } = req.body as { email?: string };
+            const normalizedEmail = normalizeEmail(email || "");
+            if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
+                return res.status(400).send({ error: "Invalid email" });
+            }
 
-        const device = DB.prepare("SELECT code, owner_id FROM devices WHERE code = ?").get(code) as
-            | { code: string; owner_id: number | null }
-            | undefined;
-        if (!device) {
-            return res.status(404).send({ error: "Device not found" });
-        }
+            const device = DB.prepare("SELECT code, owner_id FROM devices WHERE code = ?").get(code) as
+                | { code: string; owner_id: number | null }
+                | undefined;
+            if (!device) {
+                return res.status(404).send({ error: "Device not found" });
+            }
 
-        const targetUser = DB.prepare("SELECT id, email FROM users WHERE email = ?").get(normalizedEmail) as
-            | { id: number; email: string }
-            | undefined;
-        if (targetUser && targetUser.id === device.owner_id) {
-            return res.status(409).send({ error: "Cannot share with the owner of the device" });
-        }
+            const targetUser = DB.prepare("SELECT id, email FROM users WHERE email = ?").get(normalizedEmail) as
+                | { id: number; email: string }
+                | undefined;
+            if (targetUser && targetUser.id === device.owner_id) {
+                return res.status(409).send({ error: "Cannot share with the owner of the device" });
+            }
 
-        if (!targetUser) {
-            const adminInvitation = DB.prepare(`
+            if (!targetUser) {
+                const adminInvitation = DB.prepare(`
                 SELECT id, accepted_at, expires_at
                 FROM user_invitations
                 WHERE email = ?
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
-            `).get(normalizedEmail) as
-                | { id: number; accepted_at: string | null; expires_at: string }
-                | undefined;
+                `).get(normalizedEmail) as
+                    | { id: number; accepted_at: string | null; expires_at: string }
+                    | undefined;
 
-            if (!adminInvitation) {
-                return res.status(403).send({
-                    error: "User must be invited by admin before receiving device shares",
-                });
-            }
-
-            if (!adminInvitation.accepted_at) {
-                const expiresAt = new Date(adminInvitation.expires_at).getTime();
-                if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+                if (!adminInvitation) {
                     return res.status(403).send({
-                        error: "Admin invitation expired. Ask admin to invite the user again.",
+                        error: "User must be invited by admin before receiving device shares",
                     });
                 }
-            }
-        }
 
-        const canWriteInt = canWrite ? 1 : 0;
-        if (targetUser) {
-            DB.prepare(`
-                INSERT INTO device_shares (device_code, user_id, can_write, shared_by)
-                VALUES (?, ?, ?, ?)
+                if (!adminInvitation.accepted_at) {
+                    const expiresAt = new Date(adminInvitation.expires_at).getTime();
+                    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+                        return res.status(403).send({
+                            error: "Admin invitation expired. Ask admin to invite the user again.",
+                        });
+                    }
+                }
+            }
+
+            if (targetUser) {
+                DB.prepare(`
+                INSERT INTO device_shares (device_code, user_id, shared_by)
+                VALUES (?, ?, ?)
                 ON CONFLICT(device_code, user_id) DO UPDATE SET
-                    can_write = excluded.can_write,
                     shared_by = excluded.shared_by,
                     created_at = CURRENT_TIMESTAMP
-            `).run(code, targetUser.id, canWriteInt, userId);
-            DB.prepare(`
+                `).run(code, targetUser.id, userId);
+                DB.prepare(`
                 UPDATE device_share_invitations
                 SET accepted_at = COALESCE(accepted_at, CURRENT_TIMESTAMP)
                 WHERE device_code = ? AND email = ? AND accepted_at IS NULL
-            `).run(code, normalizedEmail);
+                `).run(code, normalizedEmail);
+                syncGeneratedMqttUserAclRulesForUser(targetUser.id);
 
-            return res.status(201).send({
-                ok: true,
-                mode: "shared",
-                deviceCode: code,
-                userId: targetUser.id,
-                email: targetUser.email,
-                canWrite: canWriteInt,
-            });
-        }
+                return res.status(201).send({
+                    ok: true,
+                    mode: "shared",
+                    deviceCode: code,
+                    userId: targetUser.id,
+                    email: targetUser.email,
+                });
+            }
 
-        const token = crypto.randomBytes(24).toString("hex");
-        const expiresAt = new Date(Date.now() + SHARE_INVITE_TTL_MS).toISOString();
-        const existingInvite = DB.prepare(`
+            const token = crypto.randomBytes(24).toString("hex");
+            const expiresAt = new Date(Date.now() + SHARE_INVITE_TTL_MS).toISOString();
+            const existingInvite = DB.prepare(`
             SELECT id
             FROM device_share_invitations
             WHERE device_code = ?
@@ -496,35 +566,37 @@ WHERE d.code = ?
               AND accepted_at IS NULL
             ORDER BY id DESC
             LIMIT 1
-        `).get(code, normalizedEmail) as { id: number } | undefined;
+            `).get(code, normalizedEmail) as { id: number } | undefined;
 
-        if (existingInvite) {
-            DB.prepare(`
+            if (existingInvite) {
+                DB.prepare(`
                 UPDATE device_share_invitations
-                SET can_write = ?,
-                    invitation_token = ?,
+                SET invitation_token = ?,
                     invited_by = ?,
                     expires_at = ?,
                     created_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            `).run(canWriteInt, token, userId, expiresAt, existingInvite.id);
-        } else {
-            DB.prepare(`
+                `).run(token, userId, expiresAt, existingInvite.id);
+            } else {
+                DB.prepare(`
                 INSERT INTO device_share_invitations (
-                    device_code, email, can_write, invitation_token, invited_by, expires_at, accepted_at
+                    device_code, email, invitation_token, invited_by, expires_at, accepted_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, NULL)
-            `).run(code, normalizedEmail, canWriteInt, token, userId, expiresAt);
-        }
+                VALUES (?, ?, ?, ?, ?, NULL)
+                `).run(code, normalizedEmail, token, userId, expiresAt);
+            }
 
-        return res.status(201).send({
-            ok: true,
-            mode: "invited",
-            deviceCode: code,
-            email: normalizedEmail,
-            canWrite: canWriteInt,
-            expiresAt,
-        });
+            return res.status(201).send({
+                ok: true,
+                mode: "invited",
+                deviceCode: code,
+                email: normalizedEmail,
+                expiresAt,
+            });
+        } catch (err) {
+            console.error("Device share error", err);
+            return res.status(500).send({ error: "Failed to share device" });
+        }
     },
 
     // DELETE /devices/:code/shares/user/:userId
@@ -545,6 +617,7 @@ WHERE d.code = ?
         if (info.changes === 0) {
             return res.status(404).send({ error: "Share not found" });
         }
+        syncGeneratedMqttUserAclRulesForUser(targetUserId);
         return res.send({ ok: true });
     },
 

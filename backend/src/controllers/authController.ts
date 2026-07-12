@@ -5,6 +5,7 @@ import { UserWithPassword } from "@shared/types/user";
 import { UsersController } from "./usersController";
 import { ROLES, Role } from "@shared/constants/auth";
 import { clearAuthCookie, setAuthCookie } from "../utils/authCookie";
+import { syncGeneratedMqttUserAclRulesForUser } from "../utils/mqttUserAcl";
 
 function toPublicUser(row: UserWithPassword) {
     return {
@@ -62,7 +63,7 @@ export const AuthController = {
 
         DB.transaction(() => {
             const pendingDeviceInvitations = DB.prepare(`
-                SELECT id, device_code, can_write
+                SELECT id, device_code
                 FROM device_share_invitations
                 WHERE email = ?
                   AND accepted_at IS NULL
@@ -70,20 +71,18 @@ export const AuthController = {
             `).all(normalizedEmail) as Array<{
                 id: number;
                 device_code: string;
-                can_write: number;
             }>;
 
             for (const invite of pendingDeviceInvitations) {
                 DB.prepare(`
-                    INSERT INTO device_shares (device_code, user_id, can_write, shared_by)
-                    SELECT ?, ?, ?, invited_by
+                    INSERT INTO device_shares (device_code, user_id, shared_by)
+                    SELECT ?, ?, invited_by
                     FROM device_share_invitations
                     WHERE id = ?
                     ON CONFLICT(device_code, user_id) DO UPDATE SET
-                        can_write = excluded.can_write,
                         shared_by = excluded.shared_by,
                         created_at = CURRENT_TIMESTAMP
-                `).run(invite.device_code, row.id, invite.can_write ? 1 : 0, invite.id);
+                `).run(invite.device_code, row.id, invite.id);
             }
 
             DB.prepare(`
@@ -94,6 +93,7 @@ export const AuthController = {
                   AND datetime(expires_at) > datetime('now')
             `).run(normalizedEmail);
         })();
+        syncGeneratedMqttUserAclRulesForUser(row.id);
 
         setAuthCookie(req, res, generateToken(row));
         res.send({ user: toPublicUser(row) });

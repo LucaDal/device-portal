@@ -47,17 +47,51 @@
     color: #cbd5e1;
 }
 
+.device-types-page .dt-section-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-bottom: 0.35rem;
+}
+
+.device-types-page .dt-section-heading h3 {
+    margin: 0;
+    color: #f8fafc;
+    font-size: 1.08rem;
+    font-weight: 700;
+}
+
+.device-types-page .dt-section-heading p {
+    margin: 0;
+    color: #cbd5e1;
+    font-size: 0.82rem;
+}
+
 .device-types-page .dt-prop-row-inline {
     grid-template-columns: minmax(0, 2fr) 130px minmax(0, 1fr) auto;
     align-items: center;
 }
 
 .device-types-page .dt-prop-row-inline-device {
-    grid-template-columns: minmax(0, 1fr) 130px 72px 48px;
+    grid-template-columns: minmax(0, 1fr) 130px 64px 72px 48px;
 }
 
 .device-types-page .dt-prop-row-inline-generic {
     grid-template-columns: minmax(0, 1fr) 130px minmax(0, 1fr) 72px;
+}
+
+.device-types-page .dt-prop-row-inline-mqtt {
+    grid-template-columns:
+        minmax(100px, 0.7fr)
+        minmax(190px, 1.3fr)
+        minmax(130px, 0.9fr)
+        minmax(120px, 0.8fr)
+        120px
+        64px;
+}
+
+.device-types-page .dt-prop-row-inline-widget {
+    grid-template-columns: minmax(110px, 0.8fr) minmax(130px, 1fr) 130px minmax(140px, 1fr) minmax(120px, 0.8fr) 72px;
 }
 
 .device-types-page .dt-prop-row-inline-device > :nth-child(2) {
@@ -65,7 +99,17 @@
 }
 
 .device-types-page .dt-prop-row-inline-generic > :nth-child(2),
-.device-types-page .dt-prop-row-inline-generic > :nth-child(3) {
+.device-types-page .dt-prop-row-inline-generic > :nth-child(3),
+.device-types-page .dt-prop-row-inline-mqtt > :nth-child(1),
+.device-types-page .dt-prop-row-inline-mqtt > :nth-child(2),
+.device-types-page .dt-prop-row-inline-mqtt > :nth-child(3),
+.device-types-page .dt-prop-row-inline-mqtt > :nth-child(4),
+.device-types-page .dt-prop-row-inline-mqtt > :nth-child(5),
+.device-types-page .dt-prop-row-inline-widget > :nth-child(1),
+.device-types-page .dt-prop-row-inline-widget > :nth-child(2),
+.device-types-page .dt-prop-row-inline-widget > :nth-child(3),
+.device-types-page .dt-prop-row-inline-widget > :nth-child(4),
+.device-types-page .dt-prop-row-inline-widget > :nth-child(5) {
     width: 100%;
 }
 
@@ -75,10 +119,20 @@
 }
 
 .device-types-page .dt-prop-row-inline-device > :nth-child(4) {
+    align-self: center;
+    justify-self: center;
+}
+
+.device-types-page .dt-prop-row-inline-device > :nth-child(5) {
     justify-self: end;
 }
 
 .device-types-page .dt-prop-row-inline-generic > :nth-child(4) {
+    justify-self: end;
+}
+
+.device-types-page .dt-prop-row-inline-mqtt > :nth-child(6),
+.device-types-page .dt-prop-row-inline-widget > :nth-child(6) {
     justify-self: end;
 }
 
@@ -108,6 +162,10 @@
 }
 
 .device-types-page .dt-prop-row-header > :nth-child(4) {
+    justify-self: center;
+}
+
+.device-types-page .dt-prop-row-header > :nth-child(5) {
     justify-self: end;
 }
 

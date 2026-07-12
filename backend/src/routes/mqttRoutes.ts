@@ -10,8 +10,8 @@ const router = Router();
 router.post("/acl", MqttController.acl);
 
 router.get("/admin/acl/:deviceCode", authMiddleware, adminOnly, MqttController.listAclRules);
-router.post("/admin/acl/:deviceCode", authMiddleware, adminOnly, MqttController.upsertAclRule);
-router.delete("/admin/acl/rules/:id", authMiddleware, adminOnly, MqttController.deleteAclRule);
+router.get("/stream", authMiddleware, MqttController.streamMessages);
+router.post("/session-publish", authMiddleware, MqttController.publishMessageWithSession);
 router.post("/publish", basicAuthMiddleware, MqttController.publishMessage);
 
 export default router;

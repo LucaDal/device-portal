@@ -1,5 +1,4 @@
 import crypto from "crypto";
-import fs from "fs";
 import { spawn } from "child_process";
 import { DB } from "../config/database";
 import {
@@ -11,6 +10,13 @@ import {
 import { ROLES } from "@shared/constants/auth";
 import { MqttBrokerSettings, MqttPublishInput } from "@shared/types/mqtt_publish";
 import { getMqttHttpAuthSecret } from "../config/secrets";
+import { canUserAccessMqttTopic } from "../utils/mqttUserAcl";
+import {
+    appendBrokerAuthArgs,
+    loadBrokerSettings,
+    validateBrokerTlsSettings,
+} from "../utils/mqttBrokerSettings";
+import { registerMqttSseClient } from "../services/mqttSseService";
 
 type AclRule = {
     action: MqttAclAction;
@@ -19,7 +25,6 @@ type AclRule = {
     priority: number;
 };
 
-const MQTT_SETTINGS_KEY = "mqtt_broker_settings";
 const MQTT_HTTP_AUTH_SECRET = getMqttHttpAuthSecret();
 
 function compareSharedSecret(req: any): boolean {
@@ -33,6 +38,10 @@ function compareSharedSecret(req: any): boolean {
 
 function getClientId(payload: any): string {
     return String(payload.clientid || payload.client_id || payload.clientId || "").trim();
+}
+
+function getUsername(payload: any): string {
+    return String(payload.username || payload.user || "").trim().toLowerCase();
 }
 
 function getAction(payload: any): MqttAclAction {
@@ -104,56 +113,6 @@ function canManageDeviceAcl(req: any, deviceCode: string): boolean {
     return role === ROLES.ADMIN;
 }
 
-function loadBrokerSettings(): MqttBrokerSettings | null {
-    const row = DB.prepare("SELECT value FROM app_settings WHERE key = ?").get(MQTT_SETTINGS_KEY) as
-        | { value: string | null }
-        | undefined;
-    if (!row?.value) return null;
-    try {
-        const parsed = JSON.parse(row.value) as Partial<MqttBrokerSettings>;
-        const host = String(parsed.host || "").trim();
-        const port = Number(parsed.port);
-        const protocol = parsed.protocol === "mqtts" ? "mqtts" : "mqtt";
-        if (!host || !Number.isFinite(port) || port <= 0 || port > 65535) return null;
-        return {
-            host,
-            port,
-            protocol,
-            username: String(parsed.username || ""),
-            password: String(parsed.password || ""),
-            clientIdPrefix: String(parsed.clientIdPrefix || "device-portal-api"),
-            allowInsecureTls: parsed.allowInsecureTls === true,
-            caFile: String(parsed.caFile || ""),
-            clientCertFile: String(parsed.clientCertFile || ""),
-            clientKeyFile: String(parsed.clientKeyFile || ""),
-        };
-    } catch {
-        return null;
-    }
-}
-
-function ensureReadableFile(pathValue: string, label: string) {
-    if (!pathValue) {
-        throw new Error(`${label} is required`);
-    }
-    fs.accessSync(pathValue, fs.constants.R_OK);
-}
-
-function validateBrokerTlsSettings(settings: MqttBrokerSettings) {
-    if (settings.protocol !== "mqtts") {
-        return;
-    }
-
-    if (!settings.allowInsecureTls) {
-        ensureReadableFile(settings.caFile, "CA file");
-    }
-
-    if (settings.clientCertFile || settings.clientKeyFile) {
-        ensureReadableFile(settings.clientCertFile, "Client certificate file");
-        ensureReadableFile(settings.clientKeyFile, "Client key file");
-    }
-}
-
 function normalizePublishInput(req: any): MqttPublishInput | null {
     const source = req.body;
     const topic = String(source?.topic || "").trim();
@@ -182,31 +141,6 @@ function normalizePublishInput(req: any): MqttPublishInput | null {
     };
 }
 
-function canUserPublishTopic(userId: number, role: string, topic: string): boolean {
-    if (!userId || !topic) return false;
-
-    const permission = DB.prepare(
-        "SELECT enabled FROM mqtt_publish_permissions WHERE user_id = ?"
-    ).get(userId) as { enabled: number } | undefined;
-
-    if (!permission || Number(permission.enabled) !== 1) {
-        return false;
-    }
-
-    const rules = DB.prepare(`
-        SELECT topic_pattern, permission
-        FROM mqtt_publish_acl_rules
-        WHERE user_id = ?
-        ORDER BY priority ASC, id ASC
-    `).all(userId) as Array<{ topic_pattern: string; permission: "allow" | "deny" }>;
-
-    for (const rule of rules) {
-        if (!mqttTopicMatches(rule.topic_pattern, topic)) continue;
-        return rule.permission === "allow";
-    }
-    return false;
-}
-
 async function publishMqttMessage(
     settings: MqttBrokerSettings,
     topic: string,
@@ -228,22 +162,7 @@ async function publishMqttMessage(
             `${settings.clientIdPrefix}-${Date.now()}`,
         ];
 
-        if (settings.username) {
-            args.push("-u", settings.username);
-        }
-        if (settings.password) {
-            args.push("-P", settings.password);
-        }
-        if (settings.protocol === "mqtts") {
-            if (settings.allowInsecureTls) {
-                args.push("--insecure");
-            } else {
-                args.push("--cafile", settings.caFile);
-            }
-            if (settings.clientCertFile && settings.clientKeyFile) {
-                args.push("--cert", settings.clientCertFile, "--key", settings.clientKeyFile);
-            }
-        }
+        appendBrokerAuthArgs(args, settings);
         const proc = spawn("mosquitto_pub", args);
         let stderr = "";
 
@@ -272,7 +191,59 @@ async function publishMqttMessage(
     });
 }
 
+async function publishForAuthenticatedUser(input: MqttPublishInput, authUser: any) {
+    const userId = Number(authUser?.id);
+    if (!canUserAccessMqttTopic(userId, MQTT_ACL_ACTIONS.PUBLISH, input.topic)) {
+        return {
+            ok: false as const,
+            status: 403,
+            body: { error: "Not authorized to publish on this topic" },
+        };
+    }
+
+    const settings = loadBrokerSettings();
+    if (!settings) {
+        return {
+            ok: false as const,
+            status: 400,
+            body: { error: "MQTT broker settings not configured. Configure them in Settings." },
+        };
+    }
+
+    const message = JSON.stringify({
+        email: authUser?.email,
+        content: input.content,
+    });
+
+    await publishMqttMessage(settings, input.topic, message);
+
+    return {
+        ok: true as const,
+        body: {
+            ok: true,
+            topic: input.topic,
+            broker: `${settings.protocol}://${settings.host}:${settings.port}`,
+        },
+    };
+}
+
 export const MqttController = {
+    streamMessages(req: any, res: any) {
+        try {
+            const userId = Number(req.user?.id);
+            if (!userId) {
+                return res.status(401).send({ error: "Missing user" });
+            }
+            return registerMqttSseClient(userId, req, res);
+        } catch (err) {
+            console.error("MQTT stream error", err);
+            if (!res.headersSent) {
+                return res.status(500).send({ error: "Failed to open MQTT stream" });
+            }
+            return res.end();
+        }
+    },
+
     acl(req: any, res: any) {
         try {
             if (!compareSharedSecret(req)) {
@@ -281,6 +252,7 @@ export const MqttController = {
 
             const payload = req.body || {};
             const clientId = getClientId(payload);
+            const username = getUsername(payload);
             const action = getAction(payload);
             const topic = getTopic(payload);
 
@@ -292,25 +264,36 @@ export const MqttController = {
                 "SELECT code, activated, COALESCE(mqtt_enabled, 1) AS mqtt_enabled FROM devices WHERE code = ?"
             ).get(clientId) as { code: string; activated: number; mqtt_enabled: number } | undefined;
 
-            if (!device || !Number(device.activated) || !Number(device.mqtt_enabled)) {
-                return deny(res, "unknown or disabled device");
+            if (device) {
+                if (!Number(device.activated) || !Number(device.mqtt_enabled)) {
+                    return deny(res, "disabled device");
+                }
+
+                const rules = loadAclRules(device.code);
+                for (const rule of rules) {
+                    if (rule.action !== MQTT_ACL_ACTIONS.ALL && rule.action !== action) {
+                        continue;
+                    }
+                    if (!mqttTopicMatches(rule.topic_pattern, topic)) {
+                        continue;
+                    }
+                    return rule.permission === MQTT_ACL_PERMISSION.ALLOW
+                        ? allow(res)
+                        : deny(res, "rule denied");
+                }
+
+                if (checkBuiltInAcl(device.code, action, topic)) {
+                    return allow(res);
+                }
             }
 
-            const rules = loadAclRules(device.code);
-            for (const rule of rules) {
-                if (rule.action !== MQTT_ACL_ACTIONS.ALL && rule.action !== action) {
-                    continue;
+            if (username) {
+                const user = DB.prepare("SELECT id FROM users WHERE email = ?").get(username) as
+                    | { id: number }
+                    | undefined;
+                if (user && canUserAccessMqttTopic(user.id, action, topic)) {
+                    return allow(res);
                 }
-                if (!mqttTopicMatches(rule.topic_pattern, topic)) {
-                    continue;
-                }
-                return rule.permission === MQTT_ACL_PERMISSION.ALLOW
-                    ? allow(res)
-                    : deny(res, "rule denied");
-            }
-
-            if (checkBuiltInAcl(device.code, action, topic)) {
-                return allow(res);
             }
             return deny(res, "default deny");
         } catch (err) {
@@ -410,34 +393,33 @@ export const MqttController = {
                 });
             }
 
-            const authUser = req.user;
-            const userId = Number(authUser?.id);
-            const role = String(authUser?.role || "");
-            if (!canUserPublishTopic(userId, role, input.topic)) {
-                return res.status(403).send({
-                    error: "Not authorized to publish on this topic",
-                });
+            const result = await publishForAuthenticatedUser(input, req.user);
+            if (!result.ok) {
+                return res.status(result.status).send(result.body);
             }
 
-            const settings = loadBrokerSettings();
-            if (!settings) {
+            return res.send(result.body);
+        } catch (err) {
+            console.error(err);
+            return res.status(500).send({ error: "Failed to publish MQTT message" });
+        }
+    },
+
+    async publishMessageWithSession(req: any, res: any) {
+        try {
+            const input = normalizePublishInput(req);
+            if (!input) {
                 return res.status(400).send({
-                    error: "MQTT broker settings not configured. Configure them in Settings.",
+                    error: "topic and JSON content are required",
                 });
             }
 
-            const message = JSON.stringify({
-                email: authUser?.email,
-                content: input.content,
-            });
+            const result = await publishForAuthenticatedUser(input, req.user);
+            if (!result.ok) {
+                return res.status(result.status).send(result.body);
+            }
 
-            await publishMqttMessage(settings, input.topic, message);
-
-            return res.send({
-                ok: true,
-                topic: input.topic,
-                broker: `${settings.protocol}://${settings.host}:${settings.port}`,
-            });
+            return res.send(result.body);
         } catch (err) {
             console.error(err);
             return res.status(500).send({ error: "Failed to publish MQTT message" });

@@ -2,13 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetchWithAuth } from "../api/apiClient";
 import { User } from "@shared/types/user";
 import { ROLES, ROLE_VALUES, Role } from "@shared/constants/auth";
-import { MqttPublishAclRule } from "@shared/types/mqtt_publish";
+import { MqttUserAclRule } from "@shared/types/mqtt";
 import ErrorBanner from "../components/ErrorBanner";
 import "../style/UserManagementPage.css";
-
-interface ManagedUser extends User {
-    mqtt_publish_enabled?: boolean;
-}
 
 interface UserInvitation {
     id: number;
@@ -28,7 +24,7 @@ interface InviteResponse {
 const USERS_URL = "/manage/users";
 
 export default function UsersManagementPage() {
-    const [users, setUsers] = useState<ManagedUser[]>([]);
+    const [users, setUsers] = useState<User[]>([]);
     const [invitations, setInvitations] = useState<UserInvitation[]>([]);
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
@@ -38,11 +34,8 @@ export default function UsersManagementPage() {
     const [inviteRole, setInviteRole] = useState<Role>(ROLES.USER);
     const [inviteResult, setInviteResult] = useState<InviteResponse | null>(null);
 
-    const [aclRows, setAclRows] = useState<MqttPublishAclRule[]>([]);
+    const [aclRows, setAclRows] = useState<MqttUserAclRule[]>([]);
     const [aclLoading, setAclLoading] = useState(false);
-    const [aclTopicPattern, setAclTopicPattern] = useState("");
-    const [aclPermission, setAclPermission] = useState<"allow" | "deny">("allow");
-    const [aclPriority, setAclPriority] = useState("100");
 
     const selectedUser = useMemo(
         () => users.find((user) => user.id === selectedUserId) || null,
@@ -54,7 +47,7 @@ export default function UsersManagementPage() {
             setLoading(true);
             setError(null);
             const [usersData, invitesData] = await Promise.all([
-                apiFetchWithAuth<ManagedUser[]>(USERS_URL, { method: "GET" }),
+                apiFetchWithAuth<User[]>(USERS_URL, { method: "GET" }),
                 apiFetchWithAuth<UserInvitation[]>("/manage/users/invitations", { method: "GET" }),
             ]);
             setUsers(usersData);
@@ -72,7 +65,7 @@ export default function UsersManagementPage() {
         }
     }
 
-    async function updateUser(id: number, payload: { role?: Role; mqtt_publish_enabled?: boolean }) {
+    async function updateUser(id: number, payload: { role?: Role }) {
         await apiFetchWithAuth(`${USERS_URL}/${id}`, {
             method: "PATCH",
             body: JSON.stringify(payload),
@@ -89,66 +82,20 @@ export default function UsersManagementPage() {
         }
     }
 
-    async function updateMqttPublishEnabled(id: number, enabled: boolean) {
-        try {
-            setError(null);
-            await updateUser(id, { mqtt_publish_enabled: enabled });
-        } catch (err: any) {
-            setError(err?.error || "Error updating MQTT publish access.");
-        }
-    }
-
     async function loadUserAcl(id: number) {
         try {
             setAclLoading(true);
             setError(null);
-            const rows = await apiFetchWithAuth<MqttPublishAclRule[]>(
-                `/manage/users/${id}/mqtt-publish-acl`,
+            const rows = await apiFetchWithAuth<MqttUserAclRule[]>(
+                `/manage/users/${id}/mqtt-acl`,
                 { method: "GET" }
             );
             setAclRows(rows);
         } catch (err: any) {
-            setError(err?.error || "Error loading MQTT publish ACL.");
+            setError(err?.error || "Error loading MQTT ACL.");
             setAclRows([]);
         } finally {
             setAclLoading(false);
-        }
-    }
-
-    async function addAclRule() {
-        if (!selectedUser) return;
-        if (!aclTopicPattern.trim()) {
-            setError("Insert an ACL topic pattern.");
-            return;
-        }
-        try {
-            setError(null);
-            await apiFetchWithAuth(`/manage/users/${selectedUser.id}/mqtt-publish-acl`, {
-                method: "POST",
-                body: JSON.stringify({
-                    topicPattern: aclTopicPattern.trim(),
-                    permission: aclPermission,
-                    priority: Number(aclPriority) || 100,
-                }),
-            });
-            setAclTopicPattern("");
-            setAclPriority("100");
-            await loadUserAcl(selectedUser.id);
-        } catch (err: any) {
-            setError(err?.error || "Error saving ACL rule.");
-        }
-    }
-
-    async function deleteAclRule(ruleId: number) {
-        if (!selectedUser) return;
-        try {
-            setError(null);
-            await apiFetchWithAuth(`/manage/users/${selectedUser.id}/mqtt-publish-acl/${ruleId}`, {
-                method: "DELETE",
-            });
-            await loadUserAcl(selectedUser.id);
-        } catch (err: any) {
-            setError(err?.error || "Error deleting ACL rule.");
         }
     }
 
@@ -212,9 +159,6 @@ export default function UsersManagementPage() {
             return;
         }
 
-        setAclTopicPattern("");
-        setAclPermission("allow");
-        setAclPriority("100");
         void loadUserAcl(selectedUser.id);
     }, [selectedUserId]);
 
@@ -225,7 +169,7 @@ export default function UsersManagementPage() {
             <header className="dt-header users-header">
                 <h1 className="users-title">User Management</h1>
                 <p className="users-subtitle">
-                    Invite users, review the current access state, and manage MQTT publishing from one place.
+                    Invite users, review account state, and inspect generated MQTT access.
                 </p>
             </header>
 
@@ -298,18 +242,10 @@ export default function UsersManagementPage() {
                                 >
                                     <div className="users-list-main">
                                         <span className="users-email">{user.email}</span>
+                                        <span className="users-meta">User #{user.id}</span>
                                     </div>
                                     <div className="users-list-aside">
                                         <span className="users-badge users-badge-role">{user.role}</span>
-                                        <span
-                                            className={`users-badge ${
-                                                user.mqtt_publish_enabled
-                                                    ? "users-badge-ok"
-                                                    : "users-badge-neutral"
-                                            }`}
-                                        >
-                                            MQTT {user.mqtt_publish_enabled ? "on" : "off"}
-                                        </span>
                                         {user.must_change_password ? (
                                             <span className="users-badge users-badge-pending">Password reset</span>
                                         ) : null}
@@ -333,6 +269,9 @@ export default function UsersManagementPage() {
                                 <div>
                                     <div className="users-email">{selectedUser.email}</div>
                                     <div className="users-meta">
+                                        User #{selectedUser.id}
+                                    </div>
+                                    <div className="users-meta">
                                         Created:{" "}
                                         {selectedUser.created_at
                                             ? new Date(selectedUser.created_at).toLocaleString()
@@ -341,15 +280,6 @@ export default function UsersManagementPage() {
                                 </div>
                                 <div className="users-detail-badges">
                                     <span className="users-badge users-badge-role">{selectedUser.role}</span>
-                                    <span
-                                        className={`users-badge ${
-                                            selectedUser.mqtt_publish_enabled
-                                                ? "users-badge-ok"
-                                                : "users-badge-neutral"
-                                        }`}
-                                    >
-                                        MQTT publish {selectedUser.mqtt_publish_enabled ? "enabled" : "disabled"}
-                                    </span>
                                 </div>
                             </div>
 
@@ -372,22 +302,6 @@ export default function UsersManagementPage() {
                                         ))}
                                     </select>
                                 </div>
-
-                                <div className="users-field users-toggle-field">
-                                    <label className="dt-checkbox">
-                                        <input
-                                            type="checkbox"
-                                            checked={Boolean(selectedUser.mqtt_publish_enabled)}
-                                            onChange={(e) =>
-                                                updateMqttPublishEnabled(selectedUser.id, e.target.checked)
-                                            }
-                                        />
-                                        <span>Enable MQTT publish</span>
-                                    </label>
-                                    <small className="users-meta">
-                                        Controls whether this user can publish through the MQTT bridge.
-                                    </small>
-                                </div>
                             </div>
 
                             {selectedUser.must_change_password ? (
@@ -398,43 +312,13 @@ export default function UsersManagementPage() {
 
                             <section className="users-subsection">
                                 <div className="users-subsection-head">
-                                    <h3>MQTT publish ACL</h3>
-                                </div>
-
-                                <div className="users-acl-form">
-                                    <input
-                                        className="users-input"
-                                        type="text"
-                                        placeholder="topic pattern (e.g. devices/+/commands/#)"
-                                        value={aclTopicPattern}
-                                        onChange={(e) => setAclTopicPattern(e.target.value)}
-                                    />
-                                    <select
-                                        className="users-select"
-                                        value={aclPermission}
-                                        onChange={(e) => setAclPermission(e.target.value as "allow" | "deny")}
-                                    >
-                                        <option value="allow">allow</option>
-                                        <option value="deny">deny</option>
-                                    </select>
-                                    <input
-                                        className="users-input"
-                                        type="number"
-                                        min={0}
-                                        step={1}
-                                        value={aclPriority}
-                                        onChange={(e) => setAclPriority(e.target.value)}
-                                        placeholder="priority"
-                                    />
-                                    <button className="users-btn users-btn-primary" onClick={addAclRule}>
-                                        Add rule
-                                    </button>
+                                    <h3>Generated MQTT ACL</h3>
                                 </div>
 
                                 {aclLoading ? (
                                     <p className="users-empty">Loading ACL...</p>
                                 ) : aclRows.length === 0 ? (
-                                    <p className="users-empty">No ACL rules configured.</p>
+                                    <p className="users-empty">No generated ACL rules.</p>
                                 ) : (
                                     <div className="users-acl-list">
                                         {aclRows.map((rule) => (
@@ -442,15 +326,10 @@ export default function UsersManagementPage() {
                                                 <div className="users-acl-main">
                                                     <span className="users-email">{rule.topic_pattern}</span>
                                                     <span className="users-meta users-acl-meta">
-                                                        {rule.permission} • priority {rule.priority}
+                                                        {rule.action} • {rule.permission} •{" "}
+                                                        {rule.source_device_code || "-"} • {rule.source_key || rule.source}
                                                     </span>
                                                 </div>
-                                                <button
-                                                    className="users-btn users-btn-danger"
-                                                    onClick={() => deleteAclRule(rule.id)}
-                                                >
-                                                    Delete
-                                                </button>
                                             </div>
                                         ))}
                                     </div>

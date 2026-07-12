@@ -19,6 +19,10 @@ const getDefaultApiBase = () => {
 
 const API_BASE = getDefaultApiBase().replace(/\/$/, "");
 
+export function getApiUrl(path: string): string {
+    return `${API_BASE}${path}`;
+}
+
 const handleUnauthorized = () => {
     localStorage.removeItem("user");
     navigateTo("/login");
@@ -68,9 +72,9 @@ export async function apiFetchFD(url: string, method: string, data?: FormData | 
             handleUnauthorized();
         }
         const errBody = await res.json().catch(() => ({}));
-        throw new Error(
-            errBody.error || "Error while saving device type"
-        );
+        return Promise.reject({
+            error: errBody.error || "Error while saving device type",
+        });
     }
     return res;
 }

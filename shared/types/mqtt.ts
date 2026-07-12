@@ -10,6 +10,18 @@ export interface MqttAclRule {
     created_at: string;
 }
 
+export interface MqttUserAclRule {
+    id: number;
+    user_id: number;
+    action: MqttAclAction;
+    topic_pattern: string;
+    permission: MqttAclPermission;
+    source: string;
+    source_device_code?: string | null;
+    source_key?: string | null;
+    created_at: string;
+}
+
 export interface DeviceCertificateSummary {
     client_id: string;
     device_code: string;

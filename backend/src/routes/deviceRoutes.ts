@@ -8,7 +8,7 @@ const router = Router();
 
 router.get("/", authMiddleware, DeviceController.list);
 router.post("/", authMiddleware, adminOnly, DeviceController.create);
-router.post("/:code/ota-secret/regenerate", authMiddleware, adminOnly, DeviceController.regenerateOtaSecret);
+router.post("/:code/secret-code/regenerate", authMiddleware, adminOnly, DeviceController.regenerateSecretCode);
 router.put("/:code/properties", authMiddleware, DeviceController.updateProperties);
 router.get("/:code/shares", authMiddleware, DeviceController.listShares);
 router.post("/:code/shares", authMiddleware, DeviceController.createShare);

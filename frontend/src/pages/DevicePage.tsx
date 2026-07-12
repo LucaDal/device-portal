@@ -10,9 +10,7 @@ import {
     removeDeviceShare,
     revokeDeviceShareInvitation,
     getMqttAclRules,
-    upsertMqttAclRule,
-    deleteMqttAclRule,
-    regenerateDeviceOtaSecret,
+    regenerateDeviceSecretCode,
     revokeDeviceOwnership,
 } from "../devices/deviceService";
 import { DeviceType } from "@shared/types/device_type";
@@ -23,76 +21,16 @@ import {
     DeviceWithRelations,
 } from "@shared/types/device";
 import { useAuth } from "../auth/AuthContext";
+import { PropertyType, SavedProperties } from "@shared/types/properties";
 import {
-    DevicePropertyMap,
-    PropertyType,
-    PropertyRow,
-    SavedProperties,
-    parseDevicePropertyMap,
-} from "@shared/types/properties";
+    DevicePropertyRow,
+    buildGenericPropertyRows,
+    buildPropertyRows,
+} from "../devices/deviceProperties";
 import { ROLES } from "@shared/constants/auth";
-import {
-    MQTT_ACL_ACTIONS,
-    MQTT_ACL_PERMISSION,
-    MqttAclAction,
-    MqttAclPermission,
-} from "@shared/constants/mqtt";
 import { MqttAclRule } from "@shared/types/mqtt";
 import ErrorBanner from "../components/ErrorBanner";
 import "../style/DevicePage.css";
-
-type DevicePropertyRow = PropertyRow & { value: string };
-
-const parseTypeProperties = (raw: unknown): Record<string, PropertyType> => {
-    const map = parseDevicePropertyMap(raw);
-    const out: Record<string, PropertyType> = {};
-    for (const [key, def] of Object.entries(map)) {
-        out[key] = def.type;
-    }
-    return out;
-};
-
-const parseTypePropertyDefinitions = (raw: unknown): DevicePropertyMap => {
-    return parseDevicePropertyMap(raw);
-};
-
-const parseDeviceProperties = (raw: unknown): SavedProperties => {
-    if (!raw) return {};
-    try {
-        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-            return obj as SavedProperties;
-        }
-    } catch (e) {
-        console.error("Could not parse device_properties", e);
-    }
-    return {};
-};
-
-const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => {
-    const typeProps = parseTypeProperties(device.type_deviceProperties);
-    const typeDefs = parseTypePropertyDefinitions(device.type_deviceProperties);
-    const devProps = parseDeviceProperties(device.device_properties);
-
-    return Object.entries(typeProps).map(([key, type]) => {
-        const savedProp = devProps[key];
-        return {
-            key,
-            type,
-            sensitive: Boolean(typeDefs[key]?.sensitive),
-            value: savedProp ? String(savedProp.value) : "",
-        };
-    });
-};
-
-const buildGenericPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => {
-    const genericProps = parseDeviceProperties(device.type_genericProperties);
-    return Object.entries(genericProps).map(([key, saved]) => ({
-        key,
-        type: saved.type,
-        value: String(saved.value),
-    }));
-};
 
 const formatDateTime = (value?: string | null): string => {
     if (!value) return "-";
@@ -140,7 +78,6 @@ const DevicesPage: React.FC = () => {
     const canCreateDevice = user?.role === ROLES.ADMIN;
     const isAdmin = canCreateDevice;
     const canViewSecurity = isAdmin;
-    const canManageSecurity = isAdmin;
 
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
     const [devices, setDevices] = useState<DeviceWithRelations[]>([]);
@@ -161,18 +98,12 @@ const DevicesPage: React.FC = () => {
 
     const [aclRules, setAclRules] = useState<MqttAclRule[]>([]);
     const [aclLoading, setAclLoading] = useState(false);
-    const [aclSaving, setAclSaving] = useState(false);
-    const [aclAction, setAclAction] = useState<MqttAclAction>(MQTT_ACL_ACTIONS.PUBLISH);
-    const [aclPermission, setAclPermission] = useState<MqttAclPermission>(MQTT_ACL_PERMISSION.ALLOW);
-    const [aclTopicPattern, setAclTopicPattern] = useState("");
-    const [aclPriority, setAclPriority] = useState("100");
 
     const [deviceShares, setDeviceShares] = useState<DeviceShareRow[]>([]);
     const [shareInvitations, setShareInvitations] = useState<DeviceShareInvitationRow[]>([]);
     const [sharingLoading, setSharingLoading] = useState(false);
     const [sharingSaving, setSharingSaving] = useState(false);
     const [shareEmail, setShareEmail] = useState("");
-    const [shareCanWrite, setShareCanWrite] = useState(false);
     const [rotatingSecret, setRotatingSecret] = useState(false);
 
     const [activeTab, setActiveTab] = useState<"create" | "list" | "properties">("list");
@@ -182,6 +113,7 @@ const DevicesPage: React.FC = () => {
     );
     const canViewDeviceProperties = isSelectedDeviceOwner;
     const canManageSharing = Boolean(selectedDevice && (isAdmin || isSelectedDeviceOwner));
+    const showSecurityPanel = canViewSecurity && (aclLoading || aclRules.length > 0);
     const canEditSelectedDevice = canViewDeviceProperties;
 
     const kpis = useMemo(() => {
@@ -276,8 +208,8 @@ const DevicesPage: React.FC = () => {
                 owner_email: ownerEmail.trim() || undefined,
                 activated,
             }) as DeviceProvisioningResult;
-            setNewDeviceSecret(created.ota_secret);
-            setSuccessMessage("Device created successfully. Save the OTA secret now.");
+            setNewDeviceSecret(created.secret_code);
+            setSuccessMessage("Device created successfully. Save the secret code now.");
             resetNewDeviceForm();
             await fetchAll();
         } catch (err: any) {
@@ -285,9 +217,9 @@ const DevicesPage: React.FC = () => {
         }
     };
 
-    const handleRegenerateOtaSecret = async (device: DeviceWithRelations) => {
+    const handleRegenerateSecretCode = async (device: DeviceWithRelations) => {
         if (!isAdmin) return;
-        if (!window.confirm(`Regenerate OTA secret for device "${device.code}"? The old secret will stop working.`)) {
+        if (!window.confirm(`Regenerate secret code for device "${device.code}"? The old secret will stop working.`)) {
             return;
         }
 
@@ -295,12 +227,12 @@ const DevicesPage: React.FC = () => {
             setRotatingSecret(true);
             setError(null);
             setSuccessMessage(null);
-            const result = await regenerateDeviceOtaSecret(device.code);
-            setNewDeviceSecret(result.ota_secret);
-            setSuccessMessage(`OTA secret regenerated for ${device.code}. Save the new value now.`);
-            window.prompt(`New OTA secret for ${device.code}. Copy it now:`, result.ota_secret);
+            const result = await regenerateDeviceSecretCode(device.code);
+            setNewDeviceSecret(result.secret_code);
+            setSuccessMessage(`Secret code regenerated for ${device.code}. Save the new value now.`);
+            window.prompt(`New secret code for ${device.code}. Copy it now:`, result.secret_code);
         } catch (err: any) {
-            setError(err?.error || "Error while regenerating OTA secret.");
+            setError(err?.error || "Error while regenerating secreti code.");
         } finally {
             setRotatingSecret(false);
         }
@@ -311,12 +243,12 @@ const DevicesPage: React.FC = () => {
         setSelectedDevice(device);
         setSuccessMessage(null);
         setError(null);
+        setNewDeviceSecret(null);
         setPropertyRows(buildPropertyRows(device));
         setGenericPropertyRows(buildGenericPropertyRows(device));
         setShareEmail("");
-        setShareCanWrite(false);
 
-        if (canManageSecurity) {
+        if (canViewSecurity) {
             await Promise.all([
                 loadAclForDevice(device.code),
                 loadSharesForDevice(device.code),
@@ -438,40 +370,6 @@ const DevicesPage: React.FC = () => {
         }
     };
 
-    const handleAddAclRule = async () => {
-        if (!selectedDevice || !canManageSecurity) return;
-        if (!aclTopicPattern.trim()) {
-            setError("Enter ACL topic pattern.");
-            return;
-        }
-        try {
-            setAclSaving(true);
-            await upsertMqttAclRule(selectedDevice.code, {
-                action: aclAction,
-                topicPattern: aclTopicPattern.trim(),
-                permission: aclPermission,
-                priority: Number(aclPriority) || 100,
-            });
-            setAclTopicPattern("");
-            setAclPriority("100");
-            await loadAclForDevice(selectedDevice.code);
-        } catch (err: any) {
-            setError(err?.error || "Error saving ACL.");
-        } finally {
-            setAclSaving(false);
-        }
-    };
-
-    const handleDeleteAclRule = async (id: number) => {
-        if (!selectedDevice || !canManageSecurity) return;
-        try {
-            await deleteMqttAclRule(id);
-            await loadAclForDevice(selectedDevice.code);
-        } catch (err: any) {
-            setError(err?.error || "Error deleting ACL.");
-        }
-    };
-
     const handleCopyDeviceCode = async (deviceCode: string) => {
         await handleCopyText(deviceCode, `Code copied: ${deviceCode}`);
     };
@@ -487,10 +385,8 @@ const DevicesPage: React.FC = () => {
             setSharingSaving(true);
             const result = await shareDeviceByEmail(selectedDevice.code, {
                 email,
-                canWrite: shareCanWrite,
             });
             setShareEmail("");
-            setShareCanWrite(false);
             setSuccessMessage(
                 result.mode === "shared"
                     ? `Device shared with ${result.email}.`
@@ -524,6 +420,25 @@ const DevicesPage: React.FC = () => {
         } catch (err: any) {
             setError(err?.error || "Error while revoking invitation.");
         }
+    };
+
+    const renderDeviceSecretAlert = () => {
+        if (!newDeviceSecret) return null;
+
+        return (
+            <div className="dt-alert dt-alert-success">
+                <strong>Device secret code</strong>
+                <div className="device-secret-block">{newDeviceSecret}</div>
+                <p className="dt-small">Shown only now. Save it on the device firmware or provisioning flow.</p>
+                <button
+                    type="button"
+                    className="dt-btn dt-btn-outline"
+                    onClick={() => handleCopyText(newDeviceSecret, "Device secret code copied to clipboard.")}
+                >
+                    Copy secret code
+                </button>
+            </div>
+        );
     };
 
     return (
@@ -639,20 +554,7 @@ const DevicesPage: React.FC = () => {
                             </div>
 
                             {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
-                            {newDeviceSecret && (
-                                <div className="dt-alert dt-alert-success">
-                                    <strong>OTA secret</strong>
-                                    <div className="device-secret-block">{newDeviceSecret}</div>
-                                    <p className="dt-small">Shown only now. Save it on the device firmware or provisioning flow.</p>
-                                    <button
-                                        type="button"
-                                        className="dt-btn dt-btn-outline"
-                                        onClick={() => handleCopyText(newDeviceSecret, "OTA secret copied to clipboard.")}
-                                    >
-                                        Copy OTA secret
-                                    </button>
-                                </div>
-                            )}
+                            {renderDeviceSecretAlert()}
 
                             <button type="submit" className="dt-btn dt-btn-primary">
                                 Create device
@@ -661,82 +563,120 @@ const DevicesPage: React.FC = () => {
                     </section>
                 )}
 
-                {(activeTab === "list" || activeTab === "properties") && (
+                {activeTab === "list" && (
                     <section className="dt-card dt-table-card">
                         <div className="dt-table-header">
-                            <h2>{activeTab === "properties" ? "Device properties" : "Device list"}</h2>
+                            <h2>Device list</h2>
                             <button className="dt-btn dt-btn-outline" onClick={fetchAll}>
                                 Refresh
                             </button>
                         </div>
 
-                        {activeTab === "list" ? (
-                            loading ? (
-                                <div className="dt-loading">Loading...</div>
-                            ) : devices.length === 0 ? (
-                                <p className="dt-empty">No devices found.</p>
-                            ) : (
-                                <div className="dt-table-wrapper">
-                                    <table className="dt-table device-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Code</th>
-                                                <th>Type</th>
-                                                <th>Owner</th>
-                                                <th>Active</th>
-                                                <th className="device-action-col">Action</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {devices.map((d) => (
-                                                <tr key={d.code}>
-                                                    <td>{d.code}</td>
-                                                    <td>{d.device_type_description ?? `type ${d.device_type_id}`}</td>
-                                                    <td>{d.owner_email ?? (d.owner_id ? `#${d.owner_id}` : "-")}</td>
-                                                    <td>{d.activated ? "✔" : "✗"}</td>
-                                                    <td className="device-action-col">
-                                                        <div className="dt-actions">
-                                                            <button
-                                                                className="dt-btn dt-btn-xs device-table-btn device-table-btn-primary"
-                                                                type="button"
-                                                                onClick={() => handleOpenProperties(d)}
-                                                            >
-                                                                Properties
-                                                            </button>
+                        {loading ? (
+                            <div className="dt-loading">Loading...</div>
+                        ) : devices.length === 0 ? (
+                            <p className="dt-empty">No devices found.</p>
+                        ) : (
+                            <div className="dt-table-wrapper">
+                                <table className="dt-table device-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Code</th>
+                                            <th>Type</th>
+                                            <th>Owner</th>
+                                            <th className="device-active-col">Active</th>
+                                            <th className="device-action-col">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {devices.map((d) => (
+                                            <tr
+                                                key={d.code}
+                                                className="dt-clickable-row"
+                                                onClick={() => handleOpenProperties(d)}
+                                                tabIndex={0}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === "Enter" || e.key === " ") {
+                                                        e.preventDefault();
+                                                        void handleOpenProperties(d);
+                                                    }
+                                                }}
+                                            >
+                                                <td>{d.code}</td>
+                                                <td>
+                                                    <div className="device-type-cell">
+                                                        <strong>{d.device_type_id}</strong>
+                                                        {d.device_type_description ? (
+                                                            <span>{d.device_type_description}</span>
+                                                        ) : null}
+                                                    </div>
+                                                </td>
+                                                <td>{d.owner_email ?? (d.owner_id ? `#${d.owner_id}` : "-")}</td>
+                                                <td className="device-active-col">
+                                                    <span
+                                                        className={`device-active-dot ${
+                                                            d.activated ? "is-active" : "is-inactive"
+                                                        }`}
+                                                        title={d.activated ? "Active" : "Inactive"}
+                                                        aria-label={d.activated ? "Active" : "Inactive"}
+                                                    />
+                                                </td>
+                                                <td className="device-action-col">
+                                                    <div className="dt-actions">
+                                                        <button
+                                                            className="dt-btn dt-btn-xs device-table-btn device-table-btn-outline"
+                                                            type="button"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                void handleCopyDeviceCode(d.code);
+                                                            }}
+                                                        >
+                                                            Copy code
+                                                        </button>
+                                                        {isAdmin && (
                                                             <button
                                                                 className="dt-btn dt-btn-xs device-table-btn device-table-btn-outline"
                                                                 type="button"
-                                                                onClick={() => handleCopyDeviceCode(d.code)}
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    void handleRevokeOwnership(d);
+                                                                }}
                                                             >
-                                                                Copy code
+                                                                Revoke owner
                                                             </button>
-                                                            {isAdmin && (
-                                                                <button
-                                                                    className="dt-btn dt-btn-xs device-table-btn device-table-btn-outline"
-                                                                    type="button"
-                                                                    onClick={() => handleRevokeOwnership(d)}
-                                                                >
-                                                                    Revoke owner
-                                                                </button>
-                                                            )}
-                                                            {isAdmin && (
-                                                                <button
-                                                                    className="dt-btn dt-btn-xs device-table-btn device-table-btn-danger"
-                                                                    type="button"
-                                                                    onClick={() => handleDeleteDevice(d)}
-                                                                >
-                                                                    Delete
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )
-                        ) : (
+                                                        )}
+                                                        {isAdmin && (
+                                                            <button
+                                                                className="dt-btn dt-btn-xs device-table-btn device-table-btn-danger"
+                                                                type="button"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    void handleDeleteDevice(d);
+                                                                }}
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </section>
+                )}
+
+                {activeTab === "properties" && (
+                    <section className="dt-card dt-table-card">
+                        <div className="dt-table-header">
+                            <h2>Device properties</h2>
+                            <button className="dt-btn dt-btn-outline" onClick={fetchAll}>
+                                Refresh
+                            </button>
+                        </div>
+
                             <div className="dt-form-group">
                                 <label htmlFor="selectedDeviceCode">Selected device</label>
                                 <select
@@ -747,12 +687,11 @@ const DevicesPage: React.FC = () => {
                                     <option value="">Select...</option>
                                     {devices.map((d) => (
                                         <option key={d.code} value={d.code}>
-                                            {d.code} - {d.device_type_description ?? d.device_type_id}
+                                            {d.code} - {d.device_type_id}
                                         </option>
                                     ))}
                                 </select>
                             </div>
-                        )}
 
                         <div className="dt-divider" />
 
@@ -764,21 +703,27 @@ const DevicesPage: React.FC = () => {
                                     <h3>Device details</h3>
                                     <p className="dt-small">
                                         <strong>{selectedDevice.code}</strong> (
-                                        {selectedDevice.device_type_description ?? `type #${selectedDevice.device_type_id}`})
+                                        {selectedDevice.device_type_id}
+                                        {selectedDevice.device_type_description
+                                            ? ` - ${selectedDevice.device_type_description}`
+                                            : ""}
+                                        )
                                     </p>
                                     {isAdmin && (
                                         <button
                                             type="button"
                                             className="dt-btn dt-btn-outline"
                                             disabled={rotatingSecret}
-                                            onClick={() => handleRegenerateOtaSecret(selectedDevice)}
+                                            onClick={() => handleRegenerateSecretCode(selectedDevice)}
                                         >
-                                            {rotatingSecret ? "Regenerating..." : "Regenerate OTA secret"}
+                                            {rotatingSecret ? "Regenerating..." : "Regenerate secret code"}
                                         </button>
                                     )}
                                 </div>
 
-                                <div className={canViewSecurity ? "device-detail-grid" : "device-detail-grid single"}>
+                                {renderDeviceSecretAlert()}
+
+                                <div className={showSecurityPanel ? "device-detail-grid" : "device-detail-grid single"}>
                                     <section className="dt-properties-panel dt-card-sub">
                                         <div className="device-subhead">
                                             <h4>Properties</h4>
@@ -853,15 +798,6 @@ const DevicesPage: React.FC = () => {
                                                             />
                                                         </div>
                                                         <div className="dt-actions">
-                                                            <label className="dt-small">
-                                                                <input
-                                                                    className="dt-check"
-                                                                    type="checkbox"
-                                                                    checked={shareCanWrite}
-                                                                    onChange={(e) => setShareCanWrite(e.target.checked)}
-                                                                />{" "}
-                                                                Write access
-                                                            </label>
                                                             <button
                                                                 type="button"
                                                                 className="dt-btn dt-btn-primary"
@@ -885,9 +821,6 @@ const DevicesPage: React.FC = () => {
                                                             >
                                                                 <div className="dt-prop-key">
                                                                     <strong>{share.user_email}</strong>
-                                                                    <span className="dt-chip">
-                                                                        {share.can_write ? "write" : "read"}
-                                                                    </span>
                                                                     <span className="dt-chip">
                                                                         since {formatDateTime(share.created_at)}
                                                                     </span>
@@ -920,9 +853,6 @@ const DevicesPage: React.FC = () => {
                                                                 <div className="dt-prop-key">
                                                                     <strong>{inv.email}</strong>
                                                                     <span className="dt-chip">
-                                                                        {inv.can_write ? "write" : "read"}
-                                                                    </span>
-                                                                    <span className="dt-chip">
                                                                         expires {formatDateTime(inv.expires_at)}
                                                                     </span>
                                                                 </div>
@@ -947,7 +877,7 @@ const DevicesPage: React.FC = () => {
                                         )}
                                     </section>
 
-                                    {canViewSecurity && (
+                                    {showSecurityPanel && (
                                         <section className="dt-properties-panel dt-card-sub">
                                             <h4>Security</h4>
 
@@ -956,8 +886,6 @@ const DevicesPage: React.FC = () => {
                                             <div className="dt-props-list compact">
                                                 {aclLoading ? (
                                                     <p className="dt-loading">Loading ACL...</p>
-                                                ) : aclRules.length === 0 ? (
-                                                    <p className="dt-empty">No ACL configured.</p>
                                                 ) : (
                                                     aclRules.map((rule) => (
                                                         <div key={rule.id} className="dt-prop-row">
@@ -967,84 +895,9 @@ const DevicesPage: React.FC = () => {
                                                                 <span className="dt-chip">{rule.permission}</span>
                                                                 <span className="dt-chip">Priority {rule.priority}</span>
                                                             </div>
-                                                            <div className="dt-actions">
-                                                                <button
-                                                                    type="button"
-                                                                    className="dt-btn dt-btn-xs dt-btn-danger"
-                                                                    onClick={() => handleDeleteAclRule(rule.id)}
-                                                                >
-                                                                    Delete
-                                                                </button>
-                                                            </div>
                                                         </div>
                                                     ))
                                                 )}
-                                            </div>
-
-                                            <div className="dt-form-group">
-                                                <label htmlFor="aclTopic">Topic Pattern</label>
-                                                <input
-                                                    id="aclTopic"
-                                                    type="text"
-                                                    value={aclTopicPattern}
-                                                    onChange={(e) => setAclTopicPattern(e.target.value)}
-                                                    disabled={!canManageSecurity}
-                                                    placeholder="devices/DEVICE_CODE/telemetry/#"
-                                                />
-                                            </div>
-                                            <div className="security-acl-grid">
-                                                <div className="dt-form-group">
-                                                    <label htmlFor="aclAction">Action</label>
-                                                    <select
-                                                        id="aclAction"
-                                                        value={aclAction}
-                                                        onChange={(e) =>
-                                                            setAclAction(e.target.value as MqttAclAction)
-                                                        }
-                                                        disabled={!canManageSecurity}
-                                                    >
-                                                        <option value={MQTT_ACL_ACTIONS.PUBLISH}>publish</option>
-                                                        <option value={MQTT_ACL_ACTIONS.SUBSCRIBE}>subscribe</option>
-                                                        <option value={MQTT_ACL_ACTIONS.ALL}>all</option>
-                                                    </select>
-                                                </div>
-                                                <div className="dt-form-group">
-                                                    <label htmlFor="aclPermission">Permission</label>
-                                                    <select
-                                                        id="aclPermission"
-                                                        value={aclPermission}
-                                                        onChange={(e) =>
-                                                            setAclPermission(e.target.value as MqttAclPermission)
-                                                        }
-                                                        disabled={!canManageSecurity}
-                                                    >
-                                                        <option value={MQTT_ACL_PERMISSION.ALLOW}>allow</option>
-                                                        <option value={MQTT_ACL_PERMISSION.DENY}>deny</option>
-                                                    </select>
-                                                </div>
-                                                <div className="dt-form-group">
-                                                    <label htmlFor="aclPriority">Priority</label>
-                                                    <input
-                                                        id="aclPriority"
-                                                        type="number"
-                                                        min={0}
-                                                        step={1}
-                                                        value={aclPriority}
-                                                        onChange={(e) => setAclPriority(e.target.value)}
-                                                        disabled={!canManageSecurity}
-                                                        placeholder="100"
-                                                    />
-                                                </div>
-                                                <div className="security-acl-submit">
-                                                    <button
-                                                        type="button"
-                                                        className="dt-btn dt-btn-primary"
-                                                        onClick={handleAddAclRule}
-                                                        disabled={aclSaving || !canManageSecurity}
-                                                    >
-                                                        {aclSaving ? "Saving..." : "Add ACL"}
-                                                    </button>
-                                                </div>
                                             </div>
 
                                         </section>

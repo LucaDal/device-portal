@@ -1,10 +1,29 @@
 import { DB } from "../config/database";
 import { parseDevicePropertyMap } from "@shared/types/properties";
+import {
+    parseDeviceTypeDashboardWidgets,
+    parseDeviceTypeMqttTopics,
+} from "@shared/types/device_type_mqtt";
+import {
+    normalizeAllDeviceTypeMqttTopicLinks,
+    normalizeDeviceTypeMqttTopics,
+    syncGeneratedMqttAclRulesForAllDevices,
+} from "../utils/deviceTypeMqtt";
+import { syncGeneratedMqttUserAclRulesForAllUsers } from "../utils/mqttUserAcl";
+import { validateMqttTopicTemplate } from "../utils/mqttTopicTemplate";
 
 export const DeviceTypeController = {
     list(req: any, res: any) {
         const rows = DB.prepare(
-            "SELECT id, description, firmware_version, created_at, deviceProperties, genericProperties FROM device_types"
+            `SELECT id,
+                description,
+                firmware_version,
+                created_at,
+                deviceProperties,
+                genericProperties,
+                mqttTopics,
+                dashboardWidgets
+             FROM device_types`
         ).all();
         res.send(rows);
     },
@@ -35,15 +54,26 @@ export const DeviceTypeController = {
                 firmware_build,
                 description,
                 deviceProperties,
-                genericProperties
+                genericProperties,
+                mqttTopics,
+                dashboardWidgets
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        stmt.run(id, normalizedFirmwareVersion, firmware_build, description, "{}", "{}");
+        stmt.run(id, normalizedFirmwareVersion, firmware_build, description, "{}", "{}", "[]", "[]");
 
         const created = DB.prepare(
-            "SELECT id, description, firmware_version, created_at, deviceProperties, genericProperties FROM device_types WHERE id = ?"
+            `SELECT id,
+                description,
+                firmware_version,
+                created_at,
+                deviceProperties,
+                genericProperties,
+                mqttTopics,
+                dashboardWidgets
+             FROM device_types
+             WHERE id = ?`
         ).get(id);
 
         res.send(created);
@@ -64,6 +94,8 @@ export const DeviceTypeController = {
         const firmware_build = req.file?.buffer ?? null;
         const devicePropertiesInput = req.body.deviceProperties;
         const genericPropertiesInput = req.body.genericProperties;
+        const mqttTopicsInput = req.body.mqttTopics;
+        const dashboardWidgetsInput = req.body.dashboardWidgets;
 
         if (!firmware_version?.trim()) {
             return res
@@ -72,9 +104,15 @@ export const DeviceTypeController = {
         }
 
         const existing = DB.prepare(
-            "SELECT id, deviceProperties, genericProperties FROM device_types WHERE id = ?"
+            "SELECT id, deviceProperties, genericProperties, mqttTopics, dashboardWidgets FROM device_types WHERE id = ?"
         ).get(id) as
-            | { id: string; deviceProperties?: string | null; genericProperties?: string | null }
+            | {
+                id: string;
+                deviceProperties?: string | null;
+                genericProperties?: string | null;
+                mqttTopics?: string | null;
+                dashboardWidgets?: string | null;
+            }
             | undefined;
 
         if (!existing) {
@@ -111,13 +149,60 @@ export const DeviceTypeController = {
             }
         }
 
+        let mqttTopics = existing.mqttTopics || "[]";
+        if (typeof mqttTopicsInput !== "undefined") {
+            try {
+                const parsed = typeof mqttTopicsInput === "string"
+                    ? JSON.parse(mqttTopicsInput)
+                    : mqttTopicsInput;
+                const normalizedTopics = normalizeDeviceTypeMqttTopics(parseDeviceTypeMqttTopics(parsed));
+                for (const topic of normalizedTopics) {
+                    if (topic.linkedTopic) continue;
+                    const validationError = validateMqttTopicTemplate(topic.topic || "");
+                    if (validationError) {
+                        return res.status(400).json({
+                            error: `${validationError} Topic "${topic.key}" is not scoped.`,
+                        });
+                    }
+                }
+                mqttTopics = JSON.stringify(normalizedTopics);
+            } catch {
+                return res
+                    .status(400)
+                    .json({ error: "mqttTopics is not a valid JSON" });
+            }
+        }
+
+        let dashboardWidgets = existing.dashboardWidgets || "[]";
+        if (typeof dashboardWidgetsInput !== "undefined") {
+            try {
+                const parsed = typeof dashboardWidgetsInput === "string"
+                    ? JSON.parse(dashboardWidgetsInput)
+                    : dashboardWidgetsInput;
+                dashboardWidgets = JSON.stringify(parseDeviceTypeDashboardWidgets(parsed));
+            } catch {
+                return res
+                    .status(400)
+                    .json({ error: "dashboardWidgets is not a valid JSON" });
+            }
+        }
+
         const setClauses: string[] = [
             "description = ?",
             "firmware_version = ?",
             "deviceProperties = ?",
             "genericProperties = ?",
+            "mqttTopics = ?",
+            "dashboardWidgets = ?",
         ];
-        const params: any[] = [description, firmware_version, deviceProperties, genericProperties];
+        const params: any[] = [
+            description,
+            firmware_version,
+            deviceProperties,
+            genericProperties,
+            mqttTopics,
+            dashboardWidgets,
+        ];
 
         if (firmware_build) {
             setClauses.push("firmware_build = ?");
@@ -133,6 +218,9 @@ export const DeviceTypeController = {
         );
 
         stmt.run(...params);
+        normalizeAllDeviceTypeMqttTopicLinks();
+        syncGeneratedMqttAclRulesForAllDevices();
+        syncGeneratedMqttUserAclRulesForAllUsers();
 
         const updated = DB.prepare(
             `SELECT id,
@@ -140,6 +228,8 @@ export const DeviceTypeController = {
                 firmware_version,
                 deviceProperties,
                 genericProperties,
+                mqttTopics,
+                dashboardWidgets,
                 created_at
                 FROM device_types
                 WHERE id = ?`

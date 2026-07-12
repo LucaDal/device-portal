@@ -1,80 +1,29 @@
 import { useEffect, useMemo, useRef, useState, FormEvent, ChangeEvent } from "react";
 import { DeviceType } from "@shared/types/device_type";
+import { PropertyRow, PropertyType } from "@shared/types/properties";
 import {
-    DevicePropertyMap,
-    PropertyRow,
-    PropertyType,
-    SavedProperties,
-    parseDevicePropertyMap,
-} from "@shared/types/properties";
+    DEVICE_TYPE_WIDGET_KINDS,
+    DeviceTypeDashboardWidget,
+    DeviceTypeMqttTopic,
+    DeviceTypeWidgetKind,
+} from "@shared/types/device_type_mqtt";
+import { MQTT_ACL_ACTIONS, MqttAclAction } from "@shared/constants/mqtt";
 import { getDeviceTypes, updateDeviceType } from "../devices/deviceService";
+import {
+    GenericPropertyRow,
+    buildDeviceTypePropertiesPayload,
+    parseDashboardWidgets,
+    parseDeviceProperties,
+    parseDeviceTypePropertiesForm,
+    parseGenericProperties,
+    parseMqttTopics,
+} from "../deviceTypes/deviceTypeProperties";
 import ErrorBanner from "../components/ErrorBanner";
 import "../style/DeviceTypesPage.css";
 
-type DeviceTypesTab = "list" | "create" | "edit" | "properties";
-type GenericPropertyRow = PropertyRow & { value: string };
+type DeviceTypesTab = "list" | "create" | "properties";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
-
-const parseDeviceProperties = (raw: unknown): PropertyRow[] => {
-    const parsed = parseDevicePropertyMap(raw);
-    return Object.entries(parsed).map(([key, def]) => ({
-        key,
-        type: def.type,
-        sensitive: Boolean(def.sensitive),
-    }));
-};
-
-const parseGenericProperties = (raw: unknown): GenericPropertyRow[] => {
-    if (!raw) return [];
-    try {
-        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-            const props = obj as SavedProperties;
-            return Object.entries(props).map(([key, saved]) => ({
-                key,
-                type: saved?.type || PropertyType.STRING,
-                value: typeof saved?.value === "undefined" ? "" : String(saved.value),
-            }));
-        }
-    } catch (e) {
-        console.error("Could not parse genericProperties", e);
-    }
-    return [];
-};
-
-const castValueForType = (
-    row: GenericPropertyRow
-): { ok: true; value: string | number | boolean } | { ok: false; error: string } => {
-    const key = row.key.trim();
-    switch (row.type) {
-        case PropertyType.INT: {
-            const n = parseInt(row.value, 10);
-            if (Number.isNaN(n)) {
-                return { ok: false, error: `Invalid value for "${key}" (int expected).` };
-            }
-            return { ok: true, value: n };
-        }
-        case PropertyType.FLOAT: {
-            const normalized = row.value.replace(",", ".");
-            const n = parseFloat(normalized);
-            if (Number.isNaN(n)) {
-                return { ok: false, error: `Invalid value for "${key}" (float expected).` };
-            }
-            return { ok: true, value: n };
-        }
-        case PropertyType.BOOL: {
-            const lower = row.value.toLowerCase();
-            if (lower !== "true" && lower !== "false") {
-                return { ok: false, error: `Invalid value for "${key}" (true/false expected).` };
-            }
-            return { ok: true, value: lower === "true" };
-        }
-        case PropertyType.STRING:
-        default:
-            return { ok: true, value: row.value };
-    }
-};
 
 const DeviceTypesPage: React.FC = () => {
     const [activeTab, setActiveTab] = useState<DeviceTypesTab>("list");
@@ -92,6 +41,9 @@ const DeviceTypesPage: React.FC = () => {
 
     const [deviceProperties, setDeviceProperties] = useState<PropertyRow[]>([]);
     const [genericProperties, setGenericProperties] = useState<GenericPropertyRow[]>([]);
+    const [mqttTopics, setMqttTopics] = useState<DeviceTypeMqttTopic[]>([]);
+    const [dashboardWidgets, setDashboardWidgets] = useState<DeviceTypeDashboardWidget[]>([]);
+    const [propertiesLoadedTypeId, setPropertiesLoadedTypeId] = useState("");
 
     const [submitting, setSubmitting] = useState(false);
     const firmwareInputRef = useRef<HTMLInputElement | null>(null);
@@ -109,6 +61,7 @@ const DeviceTypesPage: React.FC = () => {
             setDeviceTypes(data);
             if (selectedTypeId && !data.some((d) => d.id === selectedTypeId)) {
                 setSelectedTypeId("");
+                setPropertiesLoadedTypeId("");
             }
         } catch (err: any) {
             setError(err.error || "Unexpected error");
@@ -142,9 +95,21 @@ const DeviceTypesPage: React.FC = () => {
     };
 
     const loadPropertiesFields = (device: DeviceType) => {
-        setDeviceProperties(parseDeviceProperties(device.deviceProperties));
-        setGenericProperties(parseGenericProperties(device.genericProperties));
+        const formState = parseDeviceTypePropertiesForm(device);
+        setDeviceProperties(formState.deviceProperties);
+        setGenericProperties(formState.genericProperties);
+        setMqttTopics(formState.mqttTopics);
+        setDashboardWidgets(formState.dashboardWidgets);
+        setPropertiesLoadedTypeId(device.id);
     };
+
+    useEffect(() => {
+        if (activeTab !== "properties" || !selectedDevice) return;
+        if (propertiesLoadedTypeId === selectedDevice.id) return;
+
+        loadEditFields(selectedDevice);
+        loadPropertiesFields(selectedDevice);
+    }, [activeTab, selectedDevice, propertiesLoadedTypeId]);
 
     const validateFirmwareVersion = (value: string): string | null => {
         const trimmed = value.trim();
@@ -223,46 +188,6 @@ const DeviceTypesPage: React.FC = () => {
         }
     };
 
-    const handleEditSubmit = async (e: FormEvent) => {
-        e.preventDefault();
-        setError(null);
-        setSuccessMessage(null);
-
-        if (!selectedDevice) {
-            setError("Select a device type to edit.");
-            return;
-        }
-
-        if (!firmwareVersion.trim()) {
-            setError("Compile every field.");
-            return;
-        }
-
-        const fwError = validateFirmwareVersion(firmwareVersion);
-        if (fwError) {
-            setError(fwError);
-            return;
-        }
-
-        try {
-            setSubmitting(true);
-            const formData = new FormData();
-            formData.append("description", description);
-            formData.append("firmware_version", firmwareVersion);
-            if (firmwareFile) {
-                formData.append("firmware_build", firmwareFile);
-            }
-
-            await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
-            setSuccessMessage("Device type updated successfully.");
-            await fetchDeviceTypes();
-        } catch (err: any) {
-            setError(err.error || "Unexpected error while saving.");
-        } finally {
-            setSubmitting(false);
-        }
-    };
-
     const handleDelete = async (device: DeviceType) => {
         if (!window.confirm(`Delete device type "${device.id}"?`)) {
             return;
@@ -286,16 +211,9 @@ const DeviceTypesPage: React.FC = () => {
         }
     };
 
-    const handleEditAction = (device: DeviceType) => {
-        setSelectedTypeId(device.id);
-        loadEditFields(device);
-        setActiveTab("edit");
-        setError(null);
-        setSuccessMessage(null);
-    };
-
     const handlePropertiesAction = (device: DeviceType) => {
         setSelectedTypeId(device.id);
+        loadEditFields(device);
         loadPropertiesFields(device);
         setActiveTab("properties");
         setError(null);
@@ -305,18 +223,27 @@ const DeviceTypesPage: React.FC = () => {
     const handleSelectedTypeChange = (value: string) => {
         setSelectedTypeId(value);
         const device = deviceTypes.find((d) => d.id === value);
-        if (!device) return;
-
-        if (activeTab === "edit") {
-            loadEditFields(device);
+        if (!device) {
+            setPropertiesLoadedTypeId("");
+            return;
         }
+
         if (activeTab === "properties") {
+            loadEditFields(device);
             loadPropertiesFields(device);
         }
     };
 
     const handleAddDeviceProperty = () => {
-        setDeviceProperties((prev) => [...prev, { key: "", type: PropertyType.STRING, sensitive: false }]);
+        setDeviceProperties((prev) => [
+            ...prev,
+            {
+                key: "",
+                type: PropertyType.STRING,
+                sensitive: false,
+                visible: true,
+            },
+        ]);
     };
 
     const handleDevicePropertyChange = (index: number, newKey: string) => {
@@ -354,6 +281,12 @@ const DeviceTypesPage: React.FC = () => {
         );
     };
 
+    const handleDevicePropertyVisibleChange = (index: number, visible: boolean) => {
+        setDeviceProperties((prev) =>
+            prev.map((p, i) => (i === index ? { ...p, visible } : p))
+        );
+    };
+
     const handleRemoveDeviceProperty = (index: number) => {
         setDeviceProperties((prev) => prev.filter((_, i) => i !== index));
     };
@@ -370,6 +303,89 @@ const DeviceTypesPage: React.FC = () => {
         setGenericProperties((prev) => prev.filter((_, i) => i !== index));
     };
 
+    const handleAddMqttTopic = () => {
+        setMqttTopics((prev) => [
+            ...prev,
+            { key: "", label: "", topic: "", action: MQTT_ACL_ACTIONS.PUBLISH },
+        ]);
+    };
+
+    const handleMqttTopicChange = (index: number, patch: Partial<DeviceTypeMqttTopic>) => {
+        setMqttTopics((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+    };
+
+    const handleRemoveMqttTopic = (index: number) => {
+        setMqttTopics((prev) => prev.filter((_, i) => i !== index));
+    };
+
+    const getMqttTopicsForType = (deviceTypeId: string, excludeIndex?: number): DeviceTypeMqttTopic[] => {
+        if (deviceTypeId === selectedTypeId) {
+            return mqttTopics.filter((topic, index) => index !== excludeIndex && topic.key.trim());
+        }
+        const deviceType = deviceTypes.find((dt) => dt.id === deviceTypeId);
+        return deviceType ? parseMqttTopics(deviceType.mqttTopics) : [];
+    };
+
+    const handleMqttTopicLinkTypeChange = (index: number, deviceTypeId: string) => {
+        setMqttTopics((prev) =>
+            prev.map((row, i) =>
+                i === index
+                    ? {
+                        ...row,
+                        key: deviceTypeId ? "" : row.key,
+                        label: deviceTypeId ? "" : row.label,
+                        topic: deviceTypeId ? "" : row.topic,
+                        linkedTopic: deviceTypeId
+                            ? { deviceTypeId, topicKey: "" }
+                            : undefined,
+                    }
+                    : row
+            )
+        );
+    };
+
+    const handleMqttTopicLinkedTopicChange = (index: number, topicKey: string) => {
+        setMqttTopics((prev) =>
+            prev.map((row, i) => {
+                if (i !== index || !row.linkedTopic) return row;
+
+                const linked = getMqttTopicsForType(row.linkedTopic.deviceTypeId, index)
+                    .find((topic) => topic.key === topicKey);
+
+                return {
+                    ...row,
+                    key: linked?.key || row.key,
+                    label: linked?.label || "",
+                    topic: linked?.topic || row.topic || "",
+                    linkedTopic: {
+                        ...row.linkedTopic,
+                        topicKey,
+                    },
+                };
+            })
+        );
+    };
+
+    const handleAddDashboardWidget = () => {
+        setDashboardWidgets((prev) => [
+            ...prev,
+            {
+                id: "",
+                label: "",
+                kind: DEVICE_TYPE_WIDGET_KINDS.VALUE,
+                topicKey: mqttTopics[0]?.key || "",
+            },
+        ]);
+    };
+
+    const handleDashboardWidgetChange = (index: number, patch: Partial<DeviceTypeDashboardWidget>) => {
+        setDashboardWidgets((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+    };
+
+    const handleRemoveDashboardWidget = (index: number) => {
+        setDashboardWidgets((prev) => prev.filter((_, i) => i !== index));
+    };
+
     const handlePropertiesSubmit = async (e: FormEvent) => {
         e.preventDefault();
         setError(null);
@@ -380,39 +396,60 @@ const DeviceTypesPage: React.FC = () => {
             return;
         }
 
+        if (!firmwareVersion.trim()) {
+            setError("Firmware version is required.");
+            return;
+        }
+
+        const fwError = validateFirmwareVersion(firmwareVersion);
+        if (fwError) {
+            setError(fwError);
+            return;
+        }
+
         try {
             setSubmitting(true);
 
             const formData = new FormData();
-            const devicePropsObj: DevicePropertyMap = {};
-            const genericPropsObj: SavedProperties = {};
+            const propertiesAreLoaded = propertiesLoadedTypeId === selectedDevice.id;
+            const devicePropertiesForSubmit = propertiesAreLoaded
+                ? deviceProperties
+                : parseDeviceProperties(selectedDevice.deviceProperties);
+            const genericPropertiesForSubmit = propertiesAreLoaded
+                ? genericProperties
+                : parseGenericProperties(selectedDevice.genericProperties);
+            const mqttTopicsForSubmit = propertiesAreLoaded
+                ? mqttTopics
+                : parseMqttTopics(selectedDevice.mqttTopics);
+            const dashboardWidgetsForSubmit = propertiesAreLoaded
+                ? dashboardWidgets
+                : parseDashboardWidgets(selectedDevice.dashboardWidgets);
+            const payload = buildDeviceTypePropertiesPayload(
+                devicePropertiesForSubmit,
+                genericPropertiesForSubmit
+            );
 
-            for (const row of deviceProperties) {
-                const k = row.key.trim();
-                if (!k) continue;
-                devicePropsObj[k] = {
-                    type: row.type,
-                    sensitive: row.type === PropertyType.STRING && Boolean(row.sensitive),
-                };
+            if (!payload.ok) {
+                setError(payload.error);
+                return;
             }
 
-            for (const row of genericProperties) {
-                const k = row.key.trim();
-                if (!k) continue;
-                const cast = castValueForType(row);
-                if (!cast.ok) {
-                    setError(cast.error);
-                    return;
-                }
-                genericPropsObj[k] = { type: row.type, value: cast.value };
+            formData.append("description", description);
+            formData.append("firmware_version", firmwareVersion);
+            if (firmwareFile) {
+                formData.append("firmware_build", firmwareFile);
             }
+            formData.append("deviceProperties", JSON.stringify(payload.deviceProperties));
+            formData.append("genericProperties", JSON.stringify(payload.genericProperties));
+            formData.append("mqttTopics", JSON.stringify(mqttTopicsForSubmit));
+            formData.append("dashboardWidgets", JSON.stringify(dashboardWidgetsForSubmit));
 
-            formData.append("description", selectedDevice.description || "");
-            formData.append("firmware_version", selectedDevice.firmware_version || "");
-            formData.append("deviceProperties", JSON.stringify(devicePropsObj));
-            formData.append("genericProperties", JSON.stringify(genericPropsObj));
-
-            await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
+            const response = await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
+            const updated = await response.json().catch(() => null) as DeviceType | null;
+            if (updated) {
+                loadEditFields(updated);
+                loadPropertiesFields(updated);
+            }
 
             setSuccessMessage("Properties updated successfully.");
             await fetchDeviceTypes();
@@ -450,13 +487,6 @@ const DeviceTypesPage: React.FC = () => {
                 </button>
                 <button
                     type="button"
-                    className={`dt-btn ${activeTab === "edit" ? "dt-btn-primary" : "dt-btn-outline"}`}
-                    onClick={() => setActiveTab("edit")}
-                >
-                    Edit
-                </button>
-                <button
-                    type="button"
                     className={`dt-btn ${activeTab === "properties" ? "dt-btn-primary" : "dt-btn-outline"}`}
                     onClick={() => setActiveTab("properties")}
                 >
@@ -491,7 +521,18 @@ const DeviceTypesPage: React.FC = () => {
                                 </thead>
                                 <tbody>
                                     {deviceTypes.map((dt) => (
-                                        <tr key={dt.id}>
+                                        <tr
+                                            key={dt.id}
+                                            className="dt-clickable-row"
+                                            tabIndex={0}
+                                            onClick={() => handlePropertiesAction(dt)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter" || e.key === " ") {
+                                                    e.preventDefault();
+                                                    handlePropertiesAction(dt);
+                                                }
+                                            }}
+                                        >
                                             <td>{dt.id}</td>
                                             <td>{dt.description}</td>
                                             <td>{dt.firmware_version}</td>
@@ -500,22 +541,11 @@ const DeviceTypesPage: React.FC = () => {
                                                 <div className="dt-actions">
                                                     <button
                                                         type="button"
-                                                        className="dt-btn dt-btn-xs dt-btn-primary"
-                                                        onClick={() => handleEditAction(dt)}
-                                                    >
-                                                        Edit
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        className="dt-btn dt-btn-xs dt-btn-outline"
-                                                        onClick={() => handlePropertiesAction(dt)}
-                                                    >
-                                                        Properties
-                                                    </button>
-                                                    <button
-                                                        type="button"
                                                         className="dt-btn dt-btn-xs dt-btn-danger"
-                                                        onClick={() => handleDelete(dt)}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleDelete(dt);
+                                                        }}
                                                     >
                                                         Delete
                                                     </button>
@@ -613,16 +643,16 @@ const DeviceTypesPage: React.FC = () => {
                 </section>
             )}
 
-            {activeTab === "edit" && (
+            {activeTab === "properties" && (
                 <section className="dt-card dt-form-card">
                     <div className="dt-form-header">
-                        <h2>Edit device type</h2>
+                        <h2>Device type properties</h2>
                     </div>
-                    <form className="dt-form" onSubmit={handleEditSubmit}>
+                    <form className="dt-form dt-properties-form" onSubmit={handlePropertiesSubmit}>
                         <div className="dt-form-group">
-                            <label htmlFor="editTypeSelect">Device type</label>
+                            <label htmlFor="propsTypeSelect">Device type</label>
                             <select
-                                id="editTypeSelect"
+                                id="propsTypeSelect"
                                 value={selectedTypeId}
                                 onChange={(e) => handleSelectedTypeChange(e.target.value)}
                             >
@@ -636,7 +666,7 @@ const DeviceTypesPage: React.FC = () => {
                         </div>
 
                         {!selectedDevice ? (
-                            <p className="dt-empty">Select a device type to edit.</p>
+                            <p className="dt-empty">Select a device type to edit properties.</p>
                         ) : (
                             <>
                                 <div className="dt-form-group">
@@ -685,47 +715,13 @@ const DeviceTypesPage: React.FC = () => {
                                     </div>
                                 </div>
 
-                                <button
-                                    type="submit"
-                                    className="dt-btn dt-btn-primary"
-                                    disabled={submitting}
-                                >
-                                    {submitting ? "Saving..." : "Save"}
-                                </button>
-                            </>
-                        )}
-                    </form>
-                </section>
-            )}
+                                <div className="dt-divider" />
 
-            {activeTab === "properties" && (
-                <section className="dt-card dt-form-card">
-                    <div className="dt-form-header">
-                        <h2>Device type properties</h2>
-                    </div>
-                    <form className="dt-form dt-properties-form" onSubmit={handlePropertiesSubmit}>
-                        <div className="dt-form-group">
-                            <label htmlFor="propsTypeSelect">Device type</label>
-                            <select
-                                id="propsTypeSelect"
-                                value={selectedTypeId}
-                                onChange={(e) => handleSelectedTypeChange(e.target.value)}
-                            >
-                                <option value="">Select...</option>
-                                {deviceTypes.map((dt) => (
-                                    <option key={dt.id} value={dt.id}>
-                                        {dt.id} - {dt.description || "No description"}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-
-                        {!selectedDevice ? (
-                            <p className="dt-empty">Select a device type to edit properties.</p>
-                        ) : (
-                            <>
                                 <div className="dt-form-group">
-                                    <label>Device properties (filled by final user)</label>
+                                    <div className="dt-section-heading">
+                                        <h3>Device properties</h3>
+                                        <p>Filled by final user</p>
+                                    </div>
 
                                     {deviceProperties.length === 0 && (
                                         <p className="dt-empty">No properties. Add one.</p>
@@ -735,6 +731,7 @@ const DeviceTypesPage: React.FC = () => {
                                         <div className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-device dt-prop-row-header">
                                             <strong>Key</strong>
                                             <strong>Type</strong>
+                                            <strong>Show</strong>
                                             <strong>Encrypt</strong>
                                             <strong>Action</strong>
                                         </div>
@@ -768,6 +765,17 @@ const DeviceTypesPage: React.FC = () => {
                                                 <option value={PropertyType.FLOAT}>float</option>
                                                 <option value={PropertyType.BOOL}>bool</option>
                                             </select>
+
+                                            <label className="dt-small dt-prop-inline-flag">
+                                                <input
+                                                    className="dt-check"
+                                                    type="checkbox"
+                                                    checked={p.visible !== false}
+                                                    onChange={(e) =>
+                                                        handleDevicePropertyVisibleChange(index, e.target.checked)
+                                                    }
+                                                />
+                                            </label>
 
                                             {p.type === PropertyType.STRING ? (
                                                 <label className="dt-small dt-prop-inline-flag">
@@ -806,7 +814,220 @@ const DeviceTypesPage: React.FC = () => {
                                 <div className="dt-divider" />
 
                                 <div className="dt-form-group">
-                                    <label>Generic properties (filled by admin, shared by all devices of this type)</label>
+                                    <div className="dt-section-heading">
+                                        <h3>MQTT topics</h3>
+                                    </div>
+                                    <p className="dt-help-text">
+                                        Use placeholders to keep topics scoped: <code>{"{deviceCode}"}</code> for a
+                                        specific device, <code>{"{ownerId}"}</code> for devices owned by the same user,
+                                        and <code>{"{deviceTypeId}"}</code> for the device type.
+                                    </p>
+
+                                    {mqttTopics.length === 0 && (
+                                        <p className="dt-empty">No MQTT topics. Add one.</p>
+                                    )}
+
+                                    {mqttTopics.length > 0 && (
+                                        <div className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-mqtt dt-prop-row-header">
+                                            <strong>Key</strong>
+                                            <strong>Topic</strong>
+                                            <strong>Link type</strong>
+                                            <strong>Link topic</strong>
+                                            <strong>Action</strong>
+                                            <strong>Action</strong>
+                                        </div>
+                                    )}
+
+                                    {mqttTopics.map((topic, index) => (
+                                        <div
+                                            key={`mqtt-topic-${index}`}
+                                            className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-mqtt"
+                                        >
+                                            <input
+                                                type="text"
+                                                placeholder="relaySet"
+                                                value={topic.key}
+                                                disabled={Boolean(topic.linkedTopic)}
+                                                onChange={(e) =>
+                                                    handleMqttTopicChange(index, { key: e.target.value })
+                                                }
+                                            />
+                                            <input
+                                                type="text"
+                                                placeholder="devices/{deviceCode}/commands/relay"
+                                                value={topic.topic || ""}
+                                                disabled={Boolean(topic.linkedTopic)}
+                                                onChange={(e) =>
+                                                    handleMqttTopicChange(index, { topic: e.target.value })
+                                                }
+                                            />
+                                            <select
+                                                value={topic.linkedTopic?.deviceTypeId || ""}
+                                                onChange={(e) => handleMqttTopicLinkTypeChange(index, e.target.value)}
+                                            >
+                                                <option value="">No link</option>
+                                                {deviceTypes.map((dt) => (
+                                                    <option key={dt.id} value={dt.id}>
+                                                        {dt.id}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <select
+                                                value={topic.linkedTopic?.topicKey || ""}
+                                                disabled={!topic.linkedTopic?.deviceTypeId}
+                                                onChange={(e) => handleMqttTopicLinkedTopicChange(index, e.target.value)}
+                                            >
+                                                <option value="">Select...</option>
+                                                {getMqttTopicsForType(topic.linkedTopic?.deviceTypeId || "", index)
+                                                    .map((linked) => (
+                                                        <option key={linked.key} value={linked.key}>
+                                                            {linked.key}
+                                                        </option>
+                                                    ))}
+                                            </select>
+                                            <select
+                                                value={topic.action}
+                                                onChange={(e) =>
+                                                    handleMqttTopicChange(index, {
+                                                        action: e.target.value as MqttAclAction,
+                                                    })
+                                                }
+                                            >
+                                                <option value={MQTT_ACL_ACTIONS.PUBLISH}>publish</option>
+                                                <option value={MQTT_ACL_ACTIONS.SUBSCRIBE}>subscribe</option>
+                                                <option value={MQTT_ACL_ACTIONS.ALL}>all</option>
+                                            </select>
+                                            <button
+                                                type="button"
+                                                className="dt-btn dt-btn-xs dt-btn-danger"
+                                                onClick={() => handleRemoveMqttTopic(index)}
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
+                                    ))}
+
+                                    <button
+                                        type="button"
+                                        className="dt-btn dt-btn-xs dt-btn-outline"
+                                        onClick={handleAddMqttTopic}
+                                    >
+                                        + Add MQTT topic
+                                    </button>
+                                </div>
+
+                                <div className="dt-divider" />
+
+                                <div className="dt-form-group">
+                                    <div className="dt-section-heading">
+                                        <h3>Dashboard widgets</h3>
+                                        <p>Admin catalog</p>
+                                    </div>
+
+                                    {dashboardWidgets.length === 0 && (
+                                        <p className="dt-empty">No widgets. Add one.</p>
+                                    )}
+
+                                    {dashboardWidgets.length > 0 && (
+                                        <div className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-widget dt-prop-row-header">
+                                            <strong>ID</strong>
+                                            <strong>Label</strong>
+                                            <strong>Kind</strong>
+                                            <strong>Topic</strong>
+                                            <strong>Publish value</strong>
+                                            <strong>Action</strong>
+                                        </div>
+                                    )}
+
+                                    {dashboardWidgets.map((widget, index) => (
+                                        <div
+                                            key={`dashboard-widget-${index}`}
+                                            className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-widget"
+                                        >
+                                            <input
+                                                type="text"
+                                                placeholder="relayButton"
+                                                value={widget.id}
+                                                onChange={(e) =>
+                                                    handleDashboardWidgetChange(index, { id: e.target.value })
+                                                }
+                                            />
+                                            <input
+                                                type="text"
+                                                placeholder="Relay ON"
+                                                value={widget.label}
+                                                onChange={(e) =>
+                                                    handleDashboardWidgetChange(index, { label: e.target.value })
+                                                }
+                                            />
+                                            <select
+                                                value={widget.kind}
+                                                onChange={(e) =>
+                                                    handleDashboardWidgetChange(index, {
+                                                        kind: e.target.value as DeviceTypeWidgetKind,
+                                                    })
+                                                }
+                                            >
+                                                <option value={DEVICE_TYPE_WIDGET_KINDS.TEXT}>text</option>
+                                                <option value={DEVICE_TYPE_WIDGET_KINDS.VALUE}>value</option>
+                                                <option value={DEVICE_TYPE_WIDGET_KINDS.SWITCH}>switch</option>
+                                                <option value={DEVICE_TYPE_WIDGET_KINDS.INPUT}>input</option>
+                                                <option value={DEVICE_TYPE_WIDGET_KINDS.BUTTON}>button</option>
+                                            </select>
+                                            <select
+                                                value={widget.topicKey}
+                                                onChange={(e) =>
+                                                    handleDashboardWidgetChange(index, { topicKey: e.target.value })
+                                                }
+                                            >
+                                                <option value="">Select topic...</option>
+                                                {mqttTopics.map((topic) => (
+                                                    <option key={topic.key} value={topic.key}>
+                                                        {topic.key}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <input
+                                                type="text"
+                                                placeholder="1 / true / on"
+                                                value={
+                                                    typeof widget.publishValue === "undefined"
+                                                        ? ""
+                                                        : String(widget.publishValue)
+                                                }
+                                                onChange={(e) =>
+                                                    handleDashboardWidgetChange(index, {
+                                                        publishValue: e.target.value,
+                                                    })
+                                                }
+                                                disabled={widget.kind !== DEVICE_TYPE_WIDGET_KINDS.BUTTON}
+                                            />
+                                            <button
+                                                type="button"
+                                                className="dt-btn dt-btn-xs dt-btn-danger"
+                                                onClick={() => handleRemoveDashboardWidget(index)}
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
+                                    ))}
+
+                                    <button
+                                        type="button"
+                                        className="dt-btn dt-btn-xs dt-btn-outline"
+                                        onClick={handleAddDashboardWidget}
+                                    >
+                                        + Add widget
+                                    </button>
+                                </div>
+
+                                <div className="dt-divider" />
+
+                                <div className="dt-form-group">
+                                    <div className="dt-section-heading">
+                                        <h3>Generic properties</h3>
+                                        <p>Filled by admin and shared by all devices of this type</p>
+                                    </div>
 
                                     {genericProperties.length === 0 && (
                                         <p className="dt-empty">No generic properties. Add one.</p>

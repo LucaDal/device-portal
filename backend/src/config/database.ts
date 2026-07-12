@@ -62,7 +62,7 @@ DB.exec(`
     );
     CREATE TABLE IF NOT EXISTS device_properties (
         id INTEGER PRIMARY KEY,
-        device_code INTEGER NOT NULL,
+        device_code TEXT NOT NULL,
         properties TEXT,
         FOREIGN KEY(device_code) REFERENCES devices(code) ON DELETE CASCADE
     );
@@ -110,7 +110,7 @@ DB.exec(`
         topic_pattern TEXT NOT NULL,
         permission TEXT NOT NULL DEFAULT 'allow',
         priority INTEGER NOT NULL DEFAULT 100,
-        source TEXT DEFAULT 'manual',
+        source TEXT NOT NULL DEFAULT 'device_type_mqtt',
         source_key TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(device_code) REFERENCES devices(code) ON DELETE CASCADE
@@ -171,7 +171,7 @@ if (!deviceTypeColumns.some((c) => c.name === "dashboardWidgets")) {
 
 const mqttAclColumns = DB.prepare("PRAGMA table_info(mqtt_acl_rules)").all() as Array<{ name: string }>;
 if (!mqttAclColumns.some((c) => c.name === "source")) {
-    DB.exec("ALTER TABLE mqtt_acl_rules ADD COLUMN source TEXT DEFAULT 'manual'");
+    DB.exec("ALTER TABLE mqtt_acl_rules ADD COLUMN source TEXT NOT NULL DEFAULT 'device_type_mqtt'");
 }
 if (!mqttAclColumns.some((c) => c.name === "source_key")) {
     DB.exec("ALTER TABLE mqtt_acl_rules ADD COLUMN source_key TEXT");

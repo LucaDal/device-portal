@@ -7,7 +7,6 @@ import {
     MQTT_AUTH_RESULT,
     MqttAclAction,
 } from "@shared/constants/mqtt";
-import { ROLES } from "@shared/constants/auth";
 import { MqttBrokerSettings, MqttPublishInput } from "@shared/types/mqtt_publish";
 import { getMqttHttpAuthSecret } from "../config/secrets";
 import { canUserAccessMqttTopic } from "../utils/mqttUserAcl";
@@ -105,12 +104,6 @@ function checkBuiltInAcl(deviceCode: string, action: MqttAclAction, topic: strin
         return mqttTopicMatches(commandsTopic, topic);
     }
     return false;
-}
-
-function canManageDeviceAcl(req: any, deviceCode: string): boolean {
-    const role = String((req.user as any)?.role || "");
-    if (!deviceCode) return false;
-    return role === ROLES.ADMIN;
 }
 
 function normalizePublishInput(req: any): MqttPublishInput | null {
@@ -317,70 +310,6 @@ export const MqttController = {
         } catch (err) {
             console.error(err);
             return res.status(500).send({ error: "Failed to list ACL rules" });
-        }
-    },
-
-    upsertAclRule(req: any, res: any) {
-        try {
-            const deviceCode = String(req.params.deviceCode || "").trim();
-            const { id, action, topicPattern, permission, priority } = req.body as {
-                id?: number;
-                action?: MqttAclAction;
-                topicPattern?: string;
-                permission?: "allow" | "deny";
-                priority?: number;
-            };
-
-            if (!deviceCode) return res.status(400).send({ error: "deviceCode is required" });
-            if (!action || !Object.values(MQTT_ACL_ACTIONS).includes(action)) {
-                return res.status(400).send({ error: "Invalid action" });
-            }
-            if (!permission || !Object.values(MQTT_ACL_PERMISSION).includes(permission)) {
-                return res.status(400).send({ error: "Invalid permission" });
-            }
-            const normalizedPattern = String(topicPattern || "").trim();
-            if (!normalizedPattern) {
-                return res.status(400).send({ error: "topicPattern is required" });
-            }
-            const normalizedPriority = Number.isFinite(Number(priority)) ? Number(priority) : 100;
-
-            if (id) {
-                const result = DB.prepare(`
-                    UPDATE mqtt_acl_rules
-                    SET action = ?, topic_pattern = ?, permission = ?, priority = ?
-                    WHERE id = ? AND device_code = ?
-                `).run(action, normalizedPattern, permission, normalizedPriority, id, deviceCode);
-                if (!result.changes) {
-                    return res.status(404).send({ error: "ACL rule not found" });
-                }
-                return res.send({ ok: true, id });
-            }
-
-            const result = DB.prepare(`
-                INSERT INTO mqtt_acl_rules (device_code, action, topic_pattern, permission, priority)
-                VALUES (?, ?, ?, ?, ?)
-            `).run(deviceCode, action, normalizedPattern, permission, normalizedPriority);
-
-            return res.status(201).send({ ok: true, id: Number(result.lastInsertRowid) });
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to upsert ACL rule" });
-        }
-    },
-
-    deleteAclRule(req: any, res: any) {
-        try {
-            const id = Number(req.params.id);
-            if (!id) return res.status(400).send({ error: "id is required" });
-
-            const result = DB.prepare("DELETE FROM mqtt_acl_rules WHERE id = ?").run(id);
-            if (!result.changes) {
-                return res.status(404).send({ error: "ACL rule not found" });
-            }
-            return res.send({ ok: true });
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to delete ACL rule" });
         }
     },
 

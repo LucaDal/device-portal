@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, FormEvent, ChangeEvent } from "react";
 import { DeviceType } from "@shared/types/device_type";
-import { PropertyRow, PropertyType } from "@shared/types/properties";
+import { PropertyType, parseSavedPropertyMap } from "@shared/types/properties";
 import {
     DEVICE_TYPE_WIDGET_KINDS,
     DeviceTypeDashboardWidget,
@@ -9,13 +9,12 @@ import {
 } from "@shared/types/device_type_mqtt";
 import { MQTT_ACL_ACTIONS, MqttAclAction } from "@shared/constants/mqtt";
 import { getDeviceTypes, updateDeviceType } from "../devices/deviceService";
+import { getDefaultProperties } from "../admin/adminService";
 import {
-    GenericPropertyRow,
+    DeviceTypePropertyEditorRow,
     buildDeviceTypePropertiesPayload,
     parseDashboardWidgets,
-    parseDeviceProperties,
     parseDeviceTypePropertiesForm,
-    parseGenericProperties,
     parseMqttTopics,
 } from "../deviceTypes/deviceTypeProperties";
 import ErrorBanner from "../components/ErrorBanner";
@@ -29,6 +28,9 @@ const DeviceTypesPage: React.FC = () => {
     const [activeTab, setActiveTab] = useState<DeviceTypesTab>("list");
 
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
+    const [defaultProperties, setDefaultProperties] = useState<DeviceTypePropertyEditorRow[]>([]);
+    const [defaultsPickerOpen, setDefaultsPickerOpen] = useState(false);
+    const [selectedDefaultKeys, setSelectedDefaultKeys] = useState<string[]>([]);
     const [selectedTypeId, setSelectedTypeId] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -39,8 +41,7 @@ const DeviceTypesPage: React.FC = () => {
     const [firmwareVersion, setFirmwareVersion] = useState("");
     const [firmwareFile, setFirmwareFile] = useState<File | null>(null);
 
-    const [deviceProperties, setDeviceProperties] = useState<PropertyRow[]>([]);
-    const [genericProperties, setGenericProperties] = useState<GenericPropertyRow[]>([]);
+    const [propertyRows, setPropertyRows] = useState<DeviceTypePropertyEditorRow[]>([]);
     const [mqttTopics, setMqttTopics] = useState<DeviceTypeMqttTopic[]>([]);
     const [dashboardWidgets, setDashboardWidgets] = useState<DeviceTypeDashboardWidget[]>([]);
     const [propertiesLoadedTypeId, setPropertiesLoadedTypeId] = useState("");
@@ -53,12 +54,39 @@ const DeviceTypesPage: React.FC = () => {
         [deviceTypes, selectedTypeId]
     );
 
+    const defaultPropertiesWithStatus = useMemo(() => {
+        const existingKeys = new Set(propertyRows.map((row) => row.key.trim()).filter(Boolean));
+        return defaultProperties.map((row) => ({
+            ...row,
+            alreadyAdded: existingKeys.has(row.key.trim()),
+        }));
+    }, [defaultProperties, propertyRows]);
+
+    const selectableDefaultKeys = useMemo(
+        () => defaultPropertiesWithStatus
+            .filter((row) => !row.alreadyAdded)
+            .map((row) => row.key),
+        [defaultPropertiesWithStatus]
+    );
+
     const fetchDeviceTypes = async () => {
         try {
             setLoading(true);
             setError(null);
-            const data = await getDeviceTypes();
+            const [data, defaults] = await Promise.all([getDeviceTypes(), getDefaultProperties()]);
             setDeviceTypes(data);
+            setDefaultProperties(
+                Object.entries(parseSavedPropertyMap(defaults)).map(([key, entry]) => ({
+                    key,
+                    label: entry.label || "",
+                    type: entry.type,
+                    global: Boolean(entry.global),
+                    value: String(entry.value),
+                    sensitive: false,
+                    visible: true,
+                    isGlobal: Boolean(entry.global),
+                }))
+            );
             if (selectedTypeId && !data.some((d) => d.id === selectedTypeId)) {
                 setSelectedTypeId("");
                 setPropertiesLoadedTypeId("");
@@ -96,8 +124,7 @@ const DeviceTypesPage: React.FC = () => {
 
     const loadPropertiesFields = (device: DeviceType) => {
         const formState = parseDeviceTypePropertiesForm(device);
-        setDeviceProperties(formState.deviceProperties);
-        setGenericProperties(formState.genericProperties);
+        setPropertyRows(formState.properties);
         setMqttTopics(formState.mqttTopics);
         setDashboardWidgets(formState.dashboardWidgets);
         setPropertiesLoadedTypeId(device.id);
@@ -177,7 +204,7 @@ const DeviceTypesPage: React.FC = () => {
             }
 
             await updateDeviceType("", "POST", formData);
-            setSuccessMessage("Operazione eseguita con successo.");
+            setSuccessMessage("Operation completed successfully.");
             resetCreateForm();
             await fetchDeviceTypes();
             setActiveTab("list");
@@ -234,73 +261,89 @@ const DeviceTypesPage: React.FC = () => {
         }
     };
 
-    const handleAddDeviceProperty = () => {
-        setDeviceProperties((prev) => [
+    const handleAddProperty = (isGlobal: boolean) => {
+        setPropertyRows((prev) => [
             ...prev,
             {
                 key: "",
+                label: "",
                 type: PropertyType.STRING,
                 sensitive: false,
                 visible: true,
+                value: "",
+                isGlobal,
             },
         ]);
     };
 
-    const handleDevicePropertyChange = (index: number, newKey: string) => {
-        setDeviceProperties((prev) =>
-            prev.map((p, i) =>
-                i === index ? { ...p, key: newKey } : p
-            )
-        );
-    };
-
-    const handleDevicePropertyTypeChange = (index: number, newType: PropertyType) => {
-        setDeviceProperties((prev) =>
+    const handlePropertyChange = (index: number, patch: Partial<DeviceTypePropertyEditorRow>) => {
+        setPropertyRows((prev) =>
             prev.map((p, i) =>
                 i === index
                     ? {
                         ...p,
-                        type: newType,
-                        sensitive: newType === PropertyType.STRING ? Boolean(p.sensitive) : false,
+                        ...patch,
+                        sensitive:
+                            (patch.type || p.type) === PropertyType.STRING && !(patch.isGlobal ?? p.isGlobal)
+                                ? Boolean(patch.sensitive ?? p.sensitive)
+                                : false,
+                        visible: patch.isGlobal ?? p.isGlobal ? true : patch.visible ?? p.visible,
                     }
                     : p
             )
         );
     };
 
-    const handleDevicePropertySensitiveChange = (index: number, sensitive: boolean) => {
-        setDeviceProperties((prev) =>
-            prev.map((p, i) =>
-                i === index
-                    ? {
-                        ...p,
-                        sensitive: p.type === PropertyType.STRING ? sensitive : false,
-                    }
-                    : p
-            )
-        );
+    const handleRemoveProperty = (index: number) => {
+        setPropertyRows((prev) => prev.filter((_, i) => i !== index));
     };
 
-    const handleDevicePropertyVisibleChange = (index: number, visible: boolean) => {
-        setDeviceProperties((prev) =>
-            prev.map((p, i) => (i === index ? { ...p, visible } : p))
-        );
+    const handleOpenDefaultPropertiesPicker = () => {
+        if (defaultProperties.length === 0) {
+            setError("No default properties are defined.");
+            return;
+        }
+        setSelectedDefaultKeys([]);
+        setDefaultsPickerOpen(true);
     };
 
-    const handleRemoveDeviceProperty = (index: number) => {
-        setDeviceProperties((prev) => prev.filter((_, i) => i !== index));
+    const handleToggleDefaultSelection = (key: string, selected: boolean) => {
+        setSelectedDefaultKeys((prev) => {
+            if (selected) {
+                return prev.includes(key) ? prev : [...prev, key];
+            }
+            return prev.filter((selectedKey) => selectedKey !== key);
+        });
     };
 
-    const handleAddGenericProperty = () => {
-        setGenericProperties((prev) => [...prev, { key: "", type: PropertyType.STRING, value: "" }]);
+    const handleSelectAllDefaultProperties = () => {
+        setSelectedDefaultKeys(selectableDefaultKeys);
     };
 
-    const handleGenericPropertyChange = (index: number, patch: Partial<GenericPropertyRow>) => {
-        setGenericProperties((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+    const handleClearDefaultSelection = () => {
+        setSelectedDefaultKeys([]);
     };
 
-    const handleRemoveGenericProperty = (index: number) => {
-        setGenericProperties((prev) => prev.filter((_, i) => i !== index));
+    const handleImportSelectedDefaultProperties = () => {
+        const selectedKeys = new Set(selectedDefaultKeys);
+        if (selectedKeys.size === 0) {
+            setError("Select at least one default property.");
+            return;
+        }
+        setPropertyRows((prev) => {
+            const existingKeys = new Set(prev.map((row) => row.key.trim()).filter(Boolean));
+            const nextDefaults = defaultProperties
+                .filter((row) => selectedKeys.has(row.key) && !existingKeys.has(row.key.trim()))
+                .map((row) => ({
+                    ...row,
+                    isGlobal: Boolean(row.global),
+                    visible: true,
+                    sensitive: false,
+                }));
+            return [...prev, ...nextDefaults];
+        });
+        setDefaultsPickerOpen(false);
+        setSelectedDefaultKeys([]);
     };
 
     const handleAddMqttTopic = () => {
@@ -412,22 +455,16 @@ const DeviceTypesPage: React.FC = () => {
 
             const formData = new FormData();
             const propertiesAreLoaded = propertiesLoadedTypeId === selectedDevice.id;
-            const devicePropertiesForSubmit = propertiesAreLoaded
-                ? deviceProperties
-                : parseDeviceProperties(selectedDevice.deviceProperties);
-            const genericPropertiesForSubmit = propertiesAreLoaded
-                ? genericProperties
-                : parseGenericProperties(selectedDevice.genericProperties);
+            const propertiesForSubmit = propertiesAreLoaded
+                ? propertyRows
+                : parseDeviceTypePropertiesForm(selectedDevice).properties;
             const mqttTopicsForSubmit = propertiesAreLoaded
                 ? mqttTopics
                 : parseMqttTopics(selectedDevice.mqttTopics);
             const dashboardWidgetsForSubmit = propertiesAreLoaded
                 ? dashboardWidgets
                 : parseDashboardWidgets(selectedDevice.dashboardWidgets);
-            const payload = buildDeviceTypePropertiesPayload(
-                devicePropertiesForSubmit,
-                genericPropertiesForSubmit
-            );
+            const payload = buildDeviceTypePropertiesPayload(propertiesForSubmit);
 
             if (!payload.ok) {
                 setError(payload.error);
@@ -719,72 +756,119 @@ const DeviceTypesPage: React.FC = () => {
 
                                 <div className="dt-form-group">
                                     <div className="dt-section-heading">
-                                        <h3>Device properties</h3>
-                                        <p>Filled by final user</p>
+                                        <h3>Properties</h3>
+                                        <p>Use Global for type-level values shared by all devices.</p>
                                     </div>
 
-                                    {deviceProperties.length === 0 && (
+                                    {propertyRows.length === 0 && (
                                         <p className="dt-empty">No properties. Add one.</p>
                                     )}
 
-                                    {deviceProperties.length > 0 && (
-                                        <div className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-device dt-prop-row-header">
+                                    {propertyRows.length > 0 && (
+                                        <div className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-combined dt-prop-row-header">
+                                            <strong>Global</strong>
                                             <strong>Key</strong>
+                                            <strong>Label</strong>
                                             <strong>Type</strong>
+                                            <strong>Default value</strong>
                                             <strong>Show</strong>
                                             <strong>Encrypt</strong>
                                             <strong>Action</strong>
                                         </div>
                                     )}
 
-                                    {deviceProperties.map((p, index) => (
+                                    {propertyRows.map((p, index) => (
                                         <div
-                                            key={`device-prop-${index}`}
-                                            className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-device"
+                                            key={`property-${index}`}
+                                            className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-combined"
                                         >
+                                            <label className="dt-small dt-prop-inline-flag">
+                                                <input
+                                                    className="dt-check"
+                                                    type="checkbox"
+                                                    checked={p.isGlobal}
+                                                    onChange={(e) =>
+                                                        handlePropertyChange(index, { isGlobal: e.target.checked })
+                                                    }
+                                                />
+                                            </label>
                                             <input
                                                 type="text"
-                                                placeholder="Key (es. maxTemp)"
+                                                placeholder="Key (e.g. maxTemp)"
                                                 value={p.key}
-                                                onChange={(e) =>
-                                                    handleDevicePropertyChange(index, e.target.value)
-                                                }
+                                                onChange={(e) => handlePropertyChange(index, { key: e.target.value })}
+                                            />
+                                            <input
+                                                type="text"
+                                                placeholder="Readable name"
+                                                value={p.label || ""}
+                                                onChange={(e) => handlePropertyChange(index, { label: e.target.value })}
                                             />
 
                                             <select
                                                 value={p.type}
                                                 onChange={(e) =>
-                                                    handleDevicePropertyTypeChange(
-                                                        index,
-                                                        e.target.value as PropertyType
-                                                    )
+                                                    handlePropertyChange(index, {
+                                                        type: e.target.value as PropertyType,
+                                                    })
                                                 }
                                             >
                                                 <option value={PropertyType.STRING}>string</option>
                                                 <option value={PropertyType.INT}>int</option>
+                                                <option value={PropertyType.UINT}>uint</option>
                                                 <option value={PropertyType.FLOAT}>float</option>
                                                 <option value={PropertyType.BOOL}>bool</option>
                                             </select>
 
-                                            <label className="dt-small dt-prop-inline-flag">
+                                            {p.type === PropertyType.BOOL ? (
+                                                <label className="dt-small dt-prop-inline-flag">
+                                                    <input
+                                                        className="dt-check"
+                                                        type="checkbox"
+                                                        checked={p.value === "true"}
+                                                        onChange={(e) =>
+                                                            handlePropertyChange(index, {
+                                                                value: e.target.checked ? "true" : "false",
+                                                            })
+                                                        }
+                                                    />
+                                                </label>
+                                            ) : (
                                                 <input
-                                                    className="dt-check"
-                                                    type="checkbox"
-                                                    checked={p.visible !== false}
+                                                    type={p.type === PropertyType.STRING ? "text" : "number"}
+                                                    min={p.type === PropertyType.UINT ? 0 : undefined}
+                                                    step={p.type === PropertyType.FLOAT ? "any" : 1}
+                                                    placeholder={p.isGlobal ? "Value" : "Optional default"}
+                                                    value={p.value}
                                                     onChange={(e) =>
-                                                        handleDevicePropertyVisibleChange(index, e.target.checked)
+                                                        handlePropertyChange(index, { value: e.target.value })
                                                     }
                                                 />
-                                            </label>
+                                            )}
 
-                                            {p.type === PropertyType.STRING ? (
+                                            {!p.isGlobal ? (
+                                                <label className="dt-small dt-prop-inline-flag">
+                                                    <input
+                                                        className="dt-check"
+                                                        type="checkbox"
+                                                        checked={p.visible !== false}
+                                                        onChange={(e) =>
+                                                            handlePropertyChange(index, { visible: e.target.checked })
+                                                        }
+                                                    />
+                                                </label>
+                                            ) : (
+                                                <span className="dt-small dt-prop-inline-empty">-</span>
+                                            )}
+
+                                            {!p.isGlobal && p.type === PropertyType.STRING ? (
                                                 <label className="dt-small dt-prop-inline-flag">
                                                     <input
                                                         className="dt-check"
                                                         type="checkbox"
                                                         checked={Boolean(p.sensitive)}
                                                         onChange={(e) =>
-                                                            handleDevicePropertySensitiveChange(index, e.target.checked)
+                                                            handlePropertyChange(index, { sensitive: e.target.checked })
                                                         }
                                                     />
                                                 </label>
@@ -795,20 +879,37 @@ const DeviceTypesPage: React.FC = () => {
                                             <button
                                                 type="button"
                                                 className="dt-btn dt-btn-xs dt-btn-danger"
-                                                onClick={() => handleRemoveDeviceProperty(index)}
+                                                onClick={() => handleRemoveProperty(index)}
                                             >
                                                 ✕
                                             </button>
                                         </div>
                                     ))}
 
-                                    <button
-                                        type="button"
-                                        className="dt-btn dt-btn-xs dt-btn-outline"
-                                        onClick={handleAddDeviceProperty}
-                                    >
-                                        + Add property
-                                    </button>
+                                    <div className="dt-actions">
+                                        <span className="dt-action-prefix">Add:</span>
+                                        <button
+                                            type="button"
+                                            className="dt-btn dt-btn-xs dt-btn-outline"
+                                            onClick={() => handleAddProperty(false)}
+                                        >
+                                            Device property
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="dt-btn dt-btn-xs dt-btn-outline"
+                                            onClick={() => handleAddProperty(true)}
+                                        >
+                                            Global property
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="dt-btn dt-btn-xs dt-btn-outline"
+                                            onClick={handleOpenDefaultPropertiesPicker}
+                                        >
+                                            Catalog property
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div className="dt-divider" />
@@ -1021,80 +1122,6 @@ const DeviceTypesPage: React.FC = () => {
                                     </button>
                                 </div>
 
-                                <div className="dt-divider" />
-
-                                <div className="dt-form-group">
-                                    <div className="dt-section-heading">
-                                        <h3>Generic properties</h3>
-                                        <p>Filled by admin and shared by all devices of this type</p>
-                                    </div>
-
-                                    {genericProperties.length === 0 && (
-                                        <p className="dt-empty">No generic properties. Add one.</p>
-                                    )}
-
-                                    {genericProperties.length > 0 && (
-                                        <div className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-generic dt-prop-row-header">
-                                            <strong>Key</strong>
-                                            <strong>Type</strong>
-                                            <strong>Value</strong>
-                                            <strong>Action</strong>
-                                        </div>
-                                    )}
-
-                                    {genericProperties.map((p, index) => (
-                                        <div
-                                            key={`generic-prop-${index}`}
-                                            className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-generic"
-                                        >
-                                            <input
-                                                type="text"
-                                                placeholder="Key (es. security)"
-                                                value={p.key}
-                                                onChange={(e) =>
-                                                    handleGenericPropertyChange(index, { key: e.target.value })
-                                                }
-                                            />
-                                            <select
-                                                value={p.type}
-                                                onChange={(e) =>
-                                                    handleGenericPropertyChange(index, {
-                                                        type: e.target.value as PropertyType,
-                                                    })
-                                                }
-                                            >
-                                                <option value={PropertyType.STRING}>string</option>
-                                                <option value={PropertyType.INT}>int</option>
-                                                <option value={PropertyType.FLOAT}>float</option>
-                                                <option value={PropertyType.BOOL}>bool</option>
-                                            </select>
-                                            <input
-                                                type="text"
-                                                placeholder={p.type === PropertyType.BOOL ? "true / false" : "Value"}
-                                                value={p.value}
-                                                onChange={(e) =>
-                                                    handleGenericPropertyChange(index, { value: e.target.value })
-                                                }
-                                            />
-                                            <button
-                                                type="button"
-                                                className="dt-btn dt-btn-xs dt-btn-danger"
-                                                onClick={() => handleRemoveGenericProperty(index)}
-                                            >
-                                                ✕
-                                            </button>
-                                        </div>
-                                    ))}
-
-                                    <button
-                                        type="button"
-                                        className="dt-btn dt-btn-xs dt-btn-outline"
-                                        onClick={handleAddGenericProperty}
-                                    >
-                                        + Add generic property
-                                    </button>
-                                </div>
-
                                 <button
                                     type="submit"
                                     className="dt-btn dt-btn-primary"
@@ -1106,6 +1133,95 @@ const DeviceTypesPage: React.FC = () => {
                         )}
                     </form>
                 </section>
+            )}
+
+            {defaultsPickerOpen && (
+                <div className="dt-modal-backdrop" role="presentation">
+                    <section
+                        className="dt-modal"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="default-properties-picker-title"
+                    >
+                        <div className="dt-modal-header">
+                            <div>
+                                <h2 id="default-properties-picker-title">Add catalog defaults</h2>
+                                <p>Select the default properties to add to this device type.</p>
+                            </div>
+                            <button
+                                type="button"
+                                className="dt-btn dt-btn-outline"
+                                onClick={() => setDefaultsPickerOpen(false)}
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="dt-modal-actions">
+                            <button
+                                type="button"
+                                className="dt-btn dt-btn-outline"
+                                onClick={handleSelectAllDefaultProperties}
+                                disabled={selectableDefaultKeys.length === 0}
+                            >
+                                Select available
+                            </button>
+                            <button
+                                type="button"
+                                className="dt-btn dt-btn-outline"
+                                onClick={handleClearDefaultSelection}
+                                disabled={selectedDefaultKeys.length === 0}
+                            >
+                                Clear
+                            </button>
+                        </div>
+
+                        <div className="dt-default-picker-list">
+                            {defaultPropertiesWithStatus.length === 0 ? (
+                                <p className="dt-empty">No default properties are defined.</p>
+                            ) : (
+                                defaultPropertiesWithStatus.map((property) => (
+                                    <label
+                                        key={property.key}
+                                        className={`dt-default-picker-row ${
+                                            property.alreadyAdded ? "is-disabled" : ""
+                                        }`}
+                                    >
+                                        <input
+                                            className="dt-check"
+                                            type="checkbox"
+                                            checked={selectedDefaultKeys.includes(property.key)}
+                                            disabled={property.alreadyAdded}
+                                            onChange={(e) =>
+                                                handleToggleDefaultSelection(property.key, e.target.checked)
+                                            }
+                                        />
+                                        <span className="dt-default-picker-main">
+                                            <strong>{property.key}</strong>
+                                            <small>
+                                                {property.label ? `${property.label} | ` : ""}
+                                                {property.type} | {property.global ? "Global" : "Device"} | Default: {property.value || "-"}
+                                                {property.alreadyAdded ? " | Already added" : ""}
+                                            </small>
+                                        </span>
+                                    </label>
+                                ))
+                            )}
+                        </div>
+
+                        <div className="dt-modal-footer">
+                            <span className="dt-small">{selectedDefaultKeys.length} selected</span>
+                            <button
+                                type="button"
+                                className="dt-btn dt-btn-primary"
+                                onClick={handleImportSelectedDefaultProperties}
+                                disabled={selectedDefaultKeys.length === 0}
+                            >
+                                Add selected
+                            </button>
+                        </div>
+                    </section>
+                </div>
             )}
 
             <ErrorBanner message={error} />

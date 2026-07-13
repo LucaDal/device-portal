@@ -122,6 +122,15 @@ DB.exec(`
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS default_device_properties (
+        key TEXT PRIMARY KEY,
+        label TEXT,
+        type TEXT NOT NULL,
+        value TEXT NOT NULL,
+        is_global INTEGER DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS mqtt_user_acl_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -136,6 +145,25 @@ DB.exec(`
         FOREIGN KEY(source_device_code) REFERENCES devices(code) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS device_request_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        event_type TEXT NOT NULL,
+        method TEXT NOT NULL,
+        path TEXT NOT NULL,
+        status_code INTEGER,
+        device_code TEXT,
+        device_type_id TEXT,
+        user_id INTEGER,
+        user_email TEXT,
+        topic TEXT,
+        ip TEXT,
+        user_agent TEXT,
+        request_summary TEXT,
+        response_summary TEXT,
+        error TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_device_share_invitations_lookup
     ON device_share_invitations(email, accepted_at, expires_at);
 
@@ -147,6 +175,12 @@ DB.exec(`
 
     CREATE INDEX IF NOT EXISTS idx_mqtt_user_acl_rules_user
     ON mqtt_user_acl_rules(user_id, action);
+
+    CREATE INDEX IF NOT EXISTS idx_device_request_logs_created
+    ON device_request_logs(created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_device_request_logs_type_created
+    ON device_request_logs(event_type, created_at DESC);
 `);
 
 const userColumns = DB.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;

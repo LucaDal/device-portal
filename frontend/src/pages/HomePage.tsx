@@ -9,6 +9,7 @@ import {
     parseDeviceTypeDashboardWidgets,
     parseDeviceTypeMqttTopics,
 } from "@shared/types/device_type_mqtt";
+import { ROLES, Role } from "@shared/constants/auth";
 import { useAuth } from "../auth/AuthContext";
 import { getDevices, publishMqttWithSession } from "../devices/deviceService";
 import { DevicePropertyRow, buildPropertyRows } from "../devices/deviceProperties";
@@ -26,12 +27,27 @@ const formatPropertyValue = (type: PropertyType, value: string): string => {
 
 const getWidgetClassName = (type: PropertyType): string => {
     if (type === PropertyType.BOOL) return "home-widget switch";
-    if (type === PropertyType.INT || type === PropertyType.FLOAT) return "home-widget value";
+    if (type === PropertyType.INT || type === PropertyType.UINT || type === PropertyType.FLOAT) return "home-widget value";
     return "home-widget text";
 };
 
 const hasPropertyMqttWidget = (property: DevicePropertyRow): boolean => {
     return Boolean(property.mqtt?.publishTopic || property.mqtt?.subscribeTopic);
+};
+
+const canSeePropertyKey = (role?: Role): boolean => {
+    return role === ROLES.ADMIN || role === ROLES.DEV;
+};
+
+const renderPropertyName = (property: DevicePropertyRow, showKey: boolean) => {
+    if (!property.label) return property.key;
+    if (!showKey) return property.label;
+    return (
+        <>
+            {property.label}
+            <small>{property.key}</small>
+        </>
+    );
 };
 
 const getMqttWidgetClassName = (widget: DeviceTypeDashboardWidget): string => {
@@ -84,6 +100,7 @@ const isLiveValueOn = (value: unknown): boolean => {
 
 const HomePage = () => {
     const { user, loading: authLoading } = useAuth();
+    const showPropertyKey = canSeePropertyKey(user?.role);
     const [devices, setDevices] = useState<DeviceWithRelations[]>([]);
     const [selectedDeviceCode, setSelectedDeviceCode] = useState("");
     const [loading, setLoading] = useState(false);
@@ -274,7 +291,7 @@ const HomePage = () => {
                     <button className="home-secondary-button" type="button" onClick={fetchDevices} disabled={loading}>
                         {loading ? "Refreshing..." : "Refresh"}
                     </button>
-                    <Link className="home-primary-link" to="/add-device">
+                    <Link className="home-primary-link" to="/devices">
                         Add device
                     </Link>
                 </div>
@@ -286,7 +303,7 @@ const HomePage = () => {
                 <section className="home-empty">
                     <h2>No devices yet</h2>
                     <p>Add or register a device to start seeing its visible properties here.</p>
-                    <Link className="home-primary-link" to="/add-device">
+                    <Link className="home-primary-link" to="/devices">
                         Add device
                     </Link>
                 </section>
@@ -428,7 +445,7 @@ const HomePage = () => {
                                         return (
                                             <article className={getWidgetClassName(property.type)} key={property.key}>
                                                 <div className="home-widget-head">
-                                                    <span>{property.key}</span>
+                                                    <span>{renderPropertyName(property, showPropertyKey)}</span>
                                                     <small>{hasLiveValue ? "live" : property.type}</small>
                                                 </div>
 
@@ -443,7 +460,9 @@ const HomePage = () => {
                                                                 : formatPropertyValue(property.type, property.value)}
                                                         </strong>
                                                     </div>
-                                                ) : property.type === PropertyType.INT || property.type === PropertyType.FLOAT ? (
+                                                ) : property.type === PropertyType.INT ||
+                                                    property.type === PropertyType.UINT ||
+                                                    property.type === PropertyType.FLOAT ? (
                                                     <div className="home-value-widget">
                                                         <strong>
                                                             {hasLiveValue
@@ -478,7 +497,7 @@ const HomePage = () => {
                                         return (
                                             <article className={getWidgetClassName(property.type)} key={property.key}>
                                                 <div className="home-widget-head">
-                                                    <span>{property.key}</span>
+                                                    <span>{renderPropertyName(property, showPropertyKey)}</span>
                                                     <small>{property.type}</small>
                                                 </div>
 
@@ -489,7 +508,9 @@ const HomePage = () => {
                                                         </span>
                                                         <strong>{formatPropertyValue(property.type, property.value)}</strong>
                                                     </div>
-                                                ) : property.type === PropertyType.INT || property.type === PropertyType.FLOAT ? (
+                                                ) : property.type === PropertyType.INT ||
+                                                    property.type === PropertyType.UINT ||
+                                                    property.type === PropertyType.FLOAT ? (
                                                     <div className="home-value-widget">
                                                         <strong>{formatPropertyValue(property.type, property.value)}</strong>
                                                     </div>

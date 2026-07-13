@@ -2,7 +2,11 @@ import { DB } from "../config/database";
 import crypto from "crypto";
 import { ROLES } from "@shared/constants/auth";
 import { DeviceProvisioningResult } from "@shared/types/device";
-import { DevicePropertyMap, SavedProperties } from "@shared/types/properties";
+import {
+    DevicePropertyMap,
+    SavedProperties,
+    castPropertyValue,
+} from "@shared/types/properties";
 import {
     decryptSensitiveDeviceProperties,
     encryptSensitiveDeviceProperties,
@@ -99,6 +103,24 @@ function mergePropertiesForSchema(
         }
     }
     return merged;
+}
+
+function normalizePropertiesForSchema(
+    properties: SavedProperties,
+    schema: DevicePropertyMap
+): { ok: true; properties: SavedProperties } | { ok: false; error: string } {
+    const out: SavedProperties = {};
+    for (const [key, definition] of Object.entries(schema)) {
+        const entry = properties[key];
+        if (!entry || typeof entry !== "object") continue;
+        const cast = castPropertyValue(definition.type, entry.value, key);
+        if (!cast.ok) return cast;
+        out[key] = {
+            type: definition.type,
+            value: cast.value,
+        };
+    }
+    return { ok: true, properties: out };
 }
 
 export const DeviceController = {
@@ -354,7 +376,7 @@ WHERE d.code = ?
         const { properties } = req.body; // può essere stringa o oggetto
 
         if (!properties) {
-            return res.status(400).json({ error: "properties mancante" });
+            return res.status(400).json({ error: "properties is required" });
         }
 
         let parsedProperties: SavedProperties = {};
@@ -399,7 +421,11 @@ WHERE d.code = ?
         let propertiesJson = "{}";
         try {
             const currentProps = parseSavedProperties(existingProps?.properties);
-            const encryptedProps = encryptSensitiveDeviceProperties(parsedProperties, schema);
+            const normalizedProps = normalizePropertiesForSchema(parsedProperties, schema);
+            if (!normalizedProps.ok) {
+                return res.status(400).json({ error: normalizedProps.error });
+            }
+            const encryptedProps = encryptSensitiveDeviceProperties(normalizedProps.properties, schema);
             const mergedProps = mergePropertiesForSchema(currentProps, encryptedProps, schema);
             propertiesJson = JSON.stringify(mergedProps);
         } catch (err: any) {

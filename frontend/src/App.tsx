@@ -7,8 +7,9 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import AccessDenied from "./pages/AccessDenied";
 import UsersManagementPage from "./pages/UsersManagementPage";
 import DeviceTypesPage from "./pages/DeviceTypesPage";
+import DefaultPropertiesPage from "./pages/DefaultPropertiesPage";
+import RequestLogsPage from "./pages/RequestLogsPage";
 import DevicesPage from "./pages/DevicePage";
-import AddDevicePage from "./pages/AddDevicePage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 import SettingsPage from "./pages/SettingsPage";
 import { ROLES } from "@shared/constants/auth";
@@ -58,14 +59,6 @@ function LayoutWrapper() {
                             }
                         />
                         <Route
-                            path="/add-device"
-                            element={
-                                <ProtectedRoute>
-                                    <AddDevicePage />
-                                </ProtectedRoute>
-                            }
-                        />
-                        <Route
                             path="/settings"
                             element={
                                 <ProtectedRoute>
@@ -78,6 +71,22 @@ function LayoutWrapper() {
                                     <DeviceTypesPage />
                                 </ProtectedRoute>
                                 }/>
+                        <Route
+                            path="/default-properties"
+                            element={
+                                <ProtectedRoute allowedRoles={[ROLES.ADMIN]}>
+                                    <DefaultPropertiesPage />
+                                </ProtectedRoute>
+                            }
+                        />
+                        <Route
+                            path="/request-logs"
+                            element={
+                                <ProtectedRoute allowedRoles={[ROLES.ADMIN, ROLES.DEV]}>
+                                    <RequestLogsPage />
+                                </ProtectedRoute>
+                            }
+                        />
                         </Routes>
                 </main>
             </div>

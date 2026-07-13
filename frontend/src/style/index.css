@@ -11,6 +11,17 @@ html, body {
     background-color: #1f2937; /* dark gray */
     color: #f3f4f6; /* light text */
     line-height: 1.6;
+    color-scheme: dark;
+}
+
+::selection {
+    background: rgba(96, 165, 250, 0.35);
+    color: #f8fafc;
+}
+
+::-moz-selection {
+    background: rgba(96, 165, 250, 0.35);
+    color: #f8fafc;
 }
 
 /* ===== Header ===== */
@@ -118,6 +129,8 @@ html, body {
     text-decoration: none;
     font-weight: 500;
     transition: color 0.12s ease, background-color 0.12s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: rgba(96, 165, 250, 0.16);
 }
 
 .sidebar-link:hover {
@@ -150,6 +163,18 @@ html, body {
 /* ===== Buttons & Inputs ===== */
 button, input, select, textarea {
     font-family: 'Inter', sans-serif;
+}
+
+button,
+[role="button"],
+.sidebar-link {
+    user-select: none;
+}
+
+button,
+a,
+[role="button"] {
+    -webkit-tap-highlight-color: rgba(96, 165, 250, 0.16);
 }
 
 input, select, textarea {

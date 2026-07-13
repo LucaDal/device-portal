@@ -201,7 +201,7 @@
 }
 
 .dt-device-props-list .dt-device-prop-row {
-    grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
     background: transparent;
     border: none;
     border-bottom: 1px solid rgba(75, 85, 99, 0.45);

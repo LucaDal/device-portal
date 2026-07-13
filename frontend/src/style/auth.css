@@ -40,6 +40,8 @@ input {
   border: 1px solid #30363d;
   background: #0d1117;
   color: #fff;
+  caret-color: #fff;
+  color-scheme: dark;
   font-size: 15px;
   outline: none;
   transition: border-color 0.2s;
@@ -47,17 +49,25 @@ input {
 
 input:focus {
   border-color: #58a6ff;
+  background: #0d1117;
+  color: #fff;
+  caret-color: #fff;
+}
+
+input::placeholder {
+  color: #8b949e;
+  opacity: 1;
 }
 
 /* Keep selected text readable on dark inputs */
 input::selection {
-  background: rgba(88, 166, 255, 0.45);
-  color: #f3f4f6;
+  background-color: #bfdbfe;
+  color: #020617;
 }
 
 input::-moz-selection {
-  background: rgba(88, 166, 255, 0.45);
-  color: #f3f4f6;
+  background-color: #bfdbfe;
+  color: #020617;
 }
 
 /* Fix dark theme + browser autofill (Chrome/Edge/Safari) */
@@ -71,6 +81,11 @@ input:-webkit-autofill:active {
   box-shadow: 0 0 0px 1000px #0d1117 inset;
   border: 1px solid #30363d;
   transition: background-color 9999s ease-out 0s;
+}
+
+input:-webkit-autofill::selection {
+  background-color: #bfdbfe;
+  color: #020617;
 }
 
 input:-webkit-autofill:focus {
@@ -94,6 +109,8 @@ input:-webkit-autofill:focus {
   font-weight: 500;
   cursor: pointer;
   transition: background 0.25s;
+  user-select: none;
+  -webkit-tap-highlight-color: rgba(88, 166, 255, 0.16);
 }
 
 .auth-btn:hover {
@@ -129,6 +146,8 @@ input:-webkit-autofill:focus {
 .auth-switch a {
   color: #58a6ff;
   text-decoration: none;
+  user-select: none;
+  -webkit-tap-highlight-color: rgba(88, 166, 255, 0.16);
 }
 
 .auth-switch a:hover {

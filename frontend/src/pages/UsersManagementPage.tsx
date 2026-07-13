@@ -29,6 +29,7 @@ export default function UsersManagementPage() {
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
     const [inviteEmail, setInviteEmail] = useState("");
     const [inviteRole, setInviteRole] = useState<Role>(ROLES.USER);
@@ -133,8 +134,18 @@ export default function UsersManagementPage() {
         if (!inviteResult) return;
         try {
             await navigator.clipboard.writeText(inviteResult.temporaryPassword);
+            setSuccessMessage("Temporary password copied.");
         } catch {
             setError("Could not copy temporary password.");
+        }
+    }
+
+    async function copyAclTopic(topic: string) {
+        try {
+            await navigator.clipboard.writeText(topic);
+            setSuccessMessage("MQTT topic copied.");
+        } catch {
+            setError("Could not copy MQTT topic.");
         }
     }
 
@@ -177,6 +188,12 @@ export default function UsersManagementPage() {
                 message={error}
                 inlineClassName="users-alert users-alert-error"
                 title="User management"
+            />
+            <ErrorBanner
+                message={successMessage}
+                variant="success"
+                inlineClassName="users-alert users-alert-success"
+                title="Done"
             />
 
             <section className="users-card">
@@ -324,12 +341,19 @@ export default function UsersManagementPage() {
                                         {aclRows.map((rule) => (
                                             <div key={rule.id} className="users-acl-row">
                                                 <div className="users-acl-main">
-                                                    <span className="users-email">{rule.topic_pattern}</span>
+                                                    <span className="users-acl-topic">{rule.topic_pattern}</span>
                                                     <span className="users-meta users-acl-meta">
-                                                        {rule.action} • {rule.permission} •{" "}
-                                                        {rule.source_device_code || "-"} • {rule.source_key || rule.source}
+                                                        Action: {rule.action} | Permission: {rule.permission} | Device:{" "}
+                                                        {rule.source_device_code || "-"} | Source: {rule.source_key || rule.source}
                                                     </span>
                                                 </div>
+                                                <button
+                                                    type="button"
+                                                    className="users-btn users-btn-secondary users-btn-copy"
+                                                    onClick={() => copyAclTopic(rule.topic_pattern)}
+                                                >
+                                                    Copy
+                                                </button>
                                             </div>
                                         ))}
                                     </div>

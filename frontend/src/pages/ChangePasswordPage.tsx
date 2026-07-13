@@ -60,6 +60,7 @@ const ChangePasswordPage: React.FC = () => {
                     <label>Current password</label>
                     <input
                         type="password"
+                        autoComplete="current-password"
                         value={currentPassword}
                         onChange={(e) => setCurrentPassword(e.target.value)}
                         required
@@ -68,6 +69,7 @@ const ChangePasswordPage: React.FC = () => {
                     <label>New password</label>
                     <input
                         type="password"
+                        autoComplete="new-password"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
                         required
@@ -76,6 +78,7 @@ const ChangePasswordPage: React.FC = () => {
                     <label>Confirm new password</label>
                     <input
                         type="password"
+                        autoComplete="new-password"
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         required

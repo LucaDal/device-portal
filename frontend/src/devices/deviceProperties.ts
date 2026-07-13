@@ -4,6 +4,7 @@ import {
     PropertyRow,
     SavedProperties,
     parseDevicePropertyMap,
+    parseSavedPropertyMap,
 } from "@shared/types/properties";
 
 export type DevicePropertyRow = PropertyRow & { value: string };
@@ -13,16 +14,7 @@ export const parseTypePropertyDefinitions = (raw: unknown): DevicePropertyMap =>
 };
 
 export const parseDeviceProperties = (raw: unknown): SavedProperties => {
-    if (!raw) return {};
-    try {
-        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-            return obj as SavedProperties;
-        }
-    } catch (e) {
-        console.error("Could not parse device properties", e);
-    }
-    return {};
+    return parseSavedPropertyMap(raw);
 };
 
 export const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => {
@@ -33,11 +25,17 @@ export const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRo
         const savedProp = devProps[key];
         return {
             key,
+            label: def.label || "",
             type: def.type,
             sensitive: Boolean(def.sensitive),
             visible: def.visible !== false,
             mqtt: def.mqtt,
-            value: savedProp ? String(savedProp.value) : "",
+            defaultValue: def.defaultValue,
+            value: savedProp
+                ? String(savedProp.value)
+                : typeof def.defaultValue === "undefined"
+                  ? ""
+                  : String(def.defaultValue),
         };
     });
 };
@@ -46,6 +44,7 @@ export const buildGenericPropertyRows = (device: DeviceWithRelations): DevicePro
     const genericProps = parseDeviceProperties(device.type_genericProperties);
     return Object.entries(genericProps).map(([key, saved]) => ({
         key,
+        label: saved.label || "",
         type: saved.type,
         value: String(saved.value),
     }));

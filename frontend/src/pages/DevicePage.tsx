@@ -12,6 +12,7 @@ import {
     getMqttAclRules,
     regenerateDeviceSecretCode,
     revokeDeviceOwnership,
+    registerDeviceByCode,
 } from "../devices/deviceService";
 import { DeviceType } from "@shared/types/device_type";
 import {
@@ -21,13 +22,13 @@ import {
     DeviceWithRelations,
 } from "@shared/types/device";
 import { useAuth } from "../auth/AuthContext";
-import { PropertyType, SavedProperties } from "@shared/types/properties";
+import { PropertyType, SavedProperties, castPropertyValue } from "@shared/types/properties";
 import {
     DevicePropertyRow,
     buildGenericPropertyRows,
     buildPropertyRows,
 } from "../devices/deviceProperties";
-import { ROLES } from "@shared/constants/auth";
+import { ROLES, Role } from "@shared/constants/auth";
 import { MqttAclRule } from "@shared/types/mqtt";
 import ErrorBanner from "../components/ErrorBanner";
 import "../style/DevicePage.css";
@@ -39,44 +40,15 @@ const formatDateTime = (value?: string | null): string => {
     return date.toLocaleString();
 };
 
-const castValueForType = (
-    row: DevicePropertyRow
-): { ok: true; value: string | number | boolean } | { ok: false; error: string } => {
-    const key = row.key.trim();
-
-    switch (row.type) {
-        case PropertyType.INT: {
-            const n = parseInt(row.value, 10);
-            if (Number.isNaN(n)) {
-                return { ok: false, error: `Invalid value for "${key}" (int expected).` };
-            }
-            return { ok: true, value: n };
-        }
-        case PropertyType.FLOAT: {
-            const normalized = row.value.replace(",", ".");
-            const n = parseFloat(normalized);
-            if (Number.isNaN(n)) {
-                return { ok: false, error: `Invalid value for "${key}" (float expected).` };
-            }
-            return { ok: true, value: n };
-        }
-        case PropertyType.BOOL: {
-            const lower = row.value.toLowerCase();
-            if (lower !== "true" && lower !== "false") {
-                return { ok: false, error: `Invalid value for "${key}" (true/false expected).` };
-            }
-            return { ok: true, value: lower === "true" };
-        }
-        case PropertyType.STRING:
-        default:
-            return { ok: true, value: row.value };
-    }
+const canSeePropertyKey = (role?: Role): boolean => {
+    return role === ROLES.ADMIN || role === ROLES.DEV;
 };
 
 const DevicesPage: React.FC = () => {
     const { user } = useAuth();
     const canCreateDevice = user?.role === ROLES.ADMIN;
     const isAdmin = canCreateDevice;
+    const showPropertyKey = canSeePropertyKey(user?.role);
     const canViewSecurity = isAdmin;
 
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
@@ -90,6 +62,8 @@ const DevicesPage: React.FC = () => {
     const [ownerEmail, setOwnerEmail] = useState("");
     const [activated, setActivated] = useState(false);
     const [newDeviceSecret, setNewDeviceSecret] = useState<string | null>(null);
+    const [registerCode, setRegisterCode] = useState("");
+    const [registeringDevice, setRegisteringDevice] = useState(false);
 
     const [selectedDevice, setSelectedDevice] = useState<DeviceWithRelations | null>(null);
     const [propertyRows, setPropertyRows] = useState<DevicePropertyRow[]>([]);
@@ -106,7 +80,7 @@ const DevicesPage: React.FC = () => {
     const [shareEmail, setShareEmail] = useState("");
     const [rotatingSecret, setRotatingSecret] = useState(false);
 
-    const [activeTab, setActiveTab] = useState<"create" | "list" | "properties">("list");
+    const [activeTab, setActiveTab] = useState<"add" | "create" | "list" | "properties">("list");
 
     const isSelectedDeviceOwner = Boolean(
         selectedDevice && user && Number(selectedDevice.owner_id) === Number(user.id)
@@ -217,6 +191,31 @@ const DevicesPage: React.FC = () => {
         }
     };
 
+    const handleRegisterDevice = async (e: FormEvent) => {
+        e.preventDefault();
+        setError(null);
+        setSuccessMessage(null);
+
+        const trimmedCode = registerCode.trim();
+        if (!trimmedCode) {
+            setError("Enter the device code.");
+            return;
+        }
+
+        try {
+            setRegisteringDevice(true);
+            await registerDeviceByCode(trimmedCode);
+            setRegisterCode("");
+            setSuccessMessage("Device added successfully.");
+            await fetchAll();
+            setActiveTab("list");
+        } catch (err: any) {
+            setError(err?.error || err?.message || "Error while adding the device. Please verify the code.");
+        } finally {
+            setRegisteringDevice(false);
+        }
+    };
+
     const handleRegenerateSecretCode = async (device: DeviceWithRelations) => {
         if (!isAdmin) return;
         if (!window.confirm(`Regenerate secret code for device "${device.code}"? The old secret will stop working.`)) {
@@ -232,7 +231,7 @@ const DevicesPage: React.FC = () => {
             setSuccessMessage(`Secret code regenerated for ${device.code}. Save the new value now.`);
             window.prompt(`New secret code for ${device.code}. Copy it now:`, result.secret_code);
         } catch (err: any) {
-            setError(err?.error || "Error while regenerating secreti code.");
+            setError(err?.error || "Error while regenerating secret code.");
         } finally {
             setRotatingSecret(false);
         }
@@ -349,7 +348,7 @@ const DevicesPage: React.FC = () => {
             const k = row.key.trim();
             if (!k) continue;
 
-            const castResult = castValueForType(row);
+            const castResult = castPropertyValue(row.type, row.value, k);
             if (!castResult.ok) {
                 setError(castResult.error);
                 return;
@@ -488,6 +487,13 @@ const DevicesPage: React.FC = () => {
                 )}
                 <button
                     type="button"
+                    className={`dt-btn ${activeTab === "add" ? "dt-btn-primary" : "dt-btn-outline"}`}
+                    onClick={() => setActiveTab("add")}
+                >
+                    Add device
+                </button>
+                <button
+                    type="button"
                     className={`dt-btn ${activeTab === "properties" ? "dt-btn-primary" : "dt-btn-outline"}`}
                     onClick={() => setActiveTab("properties")}
                 >
@@ -558,6 +564,39 @@ const DevicesPage: React.FC = () => {
 
                             <button type="submit" className="dt-btn dt-btn-primary">
                                 Create device
+                            </button>
+                        </form>
+                    </section>
+                )}
+
+                {activeTab === "add" && (
+                    <section className="dt-card dt-form-card">
+                        <div className="dt-form-header">
+                            <h2>Add device</h2>
+                        </div>
+                        <form className="dt-form" onSubmit={handleRegisterDevice}>
+                            <p className="dt-small">
+                                Enter the device code to associate it with your account.
+                            </p>
+                            <div className="dt-form-group">
+                                <label htmlFor="registerDeviceCode">Code</label>
+                                <input
+                                    id="registerDeviceCode"
+                                    type="text"
+                                    value={registerCode}
+                                    onChange={(e) => setRegisterCode(e.target.value)}
+                                    placeholder="e.g. ABCD-1234-TOKEN"
+                                />
+                            </div>
+
+                            {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
+
+                            <button
+                                type="submit"
+                                className="dt-btn dt-btn-primary"
+                                disabled={registeringDevice}
+                            >
+                                {registeringDevice ? "Adding..." : "Add device"}
                             </button>
                         </form>
                     </section>
@@ -739,25 +778,45 @@ const DevicesPage: React.FC = () => {
                                             <div className="dt-props-list dt-device-props-list">
                                                 <div className="dt-prop-row dt-device-prop-row dt-device-prop-row-header">
                                                     <strong>Key</strong>
-                                                    <strong>Type</strong>
                                                     <strong>Value</strong>
                                                 </div>
                                                 {propertyRows.map((row, index) => (
                                                     <div key={row.key} className="dt-prop-row dt-device-prop-row">
                                                         <div className="dt-prop-key dt-device-prop-key-cell">
-                                                            <strong>{row.key}</strong>
+                                                            <strong>{row.label || row.key}</strong>
+                                                            {row.label && showPropertyKey && (
+                                                                <span className="dt-chip">{row.key}</span>
+                                                            )}
                                                             {row.sensitive && <span className="dt-chip">sensitive</span>}
                                                         </div>
-                                                        <span className="dt-chip">{row.type}</span>
-                                                        <input
-                                                            type="text"
-                                                            value={row.value}
-                                                            disabled={!canEditSelectedDevice}
-                                                            onChange={(e) => handlePropertyValueChange(index, e.target.value)}
-                                                            placeholder={
-                                                                row.type === PropertyType.BOOL ? "true / false" : "Value"
-                                                            }
-                                                        />
+                                                        {row.type === PropertyType.BOOL ? (
+                                                            <label className="dt-small dt-prop-inline-flag">
+                                                                <input
+                                                                    className="dt-check"
+                                                                    type="checkbox"
+                                                                    checked={row.value === "true"}
+                                                                    disabled={!canEditSelectedDevice}
+                                                                    onChange={(e) =>
+                                                                        handlePropertyValueChange(
+                                                                            index,
+                                                                            e.target.checked ? "true" : "false"
+                                                                        )
+                                                                    }
+                                                                />
+                                                            </label>
+                                                        ) : (
+                                                            <input
+                                                                type={row.type === PropertyType.STRING ? "text" : "number"}
+                                                                min={row.type === PropertyType.UINT ? 0 : undefined}
+                                                                step={row.type === PropertyType.FLOAT ? "any" : 1}
+                                                                value={row.value}
+                                                                disabled={!canEditSelectedDevice}
+                                                                onChange={(e) =>
+                                                                    handlePropertyValueChange(index, e.target.value)
+                                                                }
+                                                                placeholder="Value"
+                                                            />
+                                                        )}
                                                     </div>
                                                 ))}
                                             </div>

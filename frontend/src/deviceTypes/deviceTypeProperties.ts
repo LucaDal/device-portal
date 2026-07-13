@@ -4,7 +4,9 @@ import {
     PropertyRow,
     PropertyType,
     SavedProperties,
+    castPropertyValue,
     parseDevicePropertyMap,
+    parseSavedPropertyMap,
 } from "@shared/types/properties";
 import {
     DeviceTypeDashboardWidget,
@@ -14,10 +16,10 @@ import {
 } from "@shared/types/device_type_mqtt";
 
 export type GenericPropertyRow = PropertyRow & { value: string };
+export type DeviceTypePropertyEditorRow = GenericPropertyRow & { isGlobal: boolean };
 
 export type DeviceTypePropertiesFormState = {
-    deviceProperties: PropertyRow[];
-    genericProperties: GenericPropertyRow[];
+    properties: DeviceTypePropertyEditorRow[];
     mqttTopics: DeviceTypeMqttTopic[];
     dashboardWidgets: DeviceTypeDashboardWidget[];
 };
@@ -34,29 +36,24 @@ export const parseDeviceProperties = (raw: unknown): PropertyRow[] => {
     const parsed = parseDevicePropertyMap(raw);
     return Object.entries(parsed).map(([key, def]) => ({
         key,
+        label: def.label || "",
         type: def.type,
         sensitive: Boolean(def.sensitive),
         visible: def.visible !== false,
+        defaultValue: def.defaultValue,
         mqtt: def.mqtt,
     }));
 };
 
 export const parseGenericProperties = (raw: unknown): GenericPropertyRow[] => {
-    if (!raw) return [];
-    try {
-        const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-            const props = obj as SavedProperties;
-            return Object.entries(props).map(([key, saved]) => ({
-                key,
-                type: saved?.type || PropertyType.STRING,
-                value: typeof saved?.value === "undefined" ? "" : String(saved.value),
-            }));
-        }
-    } catch (e) {
-        console.error("Could not parse genericProperties", e);
-    }
-    return [];
+    const props = parseSavedPropertyMap(raw);
+    return Object.entries(props).map(([key, saved]) => ({
+        key,
+        label: saved?.label || "",
+        type: saved?.type || PropertyType.STRING,
+        global: Boolean(saved?.global),
+        value: typeof saved?.value === "undefined" ? "" : String(saved.value),
+    }));
 };
 
 export const parseMqttTopics = (raw: unknown): DeviceTypeMqttTopic[] => {
@@ -70,8 +67,19 @@ export const parseDashboardWidgets = (raw: unknown): DeviceTypeDashboardWidget[]
 export const parseDeviceTypePropertiesForm = (
     device: Pick<DeviceType, "deviceProperties" | "genericProperties" | "mqttTopics" | "dashboardWidgets">
 ): DeviceTypePropertiesFormState => ({
-    deviceProperties: parseDeviceProperties(device.deviceProperties),
-    genericProperties: parseGenericProperties(device.genericProperties),
+    properties: [
+        ...parseDeviceProperties(device.deviceProperties).map((row) => ({
+            ...row,
+            value: typeof row.defaultValue === "undefined" ? "" : String(row.defaultValue),
+            isGlobal: false,
+        })),
+        ...parseGenericProperties(device.genericProperties).map((row) => ({
+            ...row,
+            sensitive: false,
+            visible: true,
+            isGlobal: true,
+        })),
+    ],
     mqttTopics: parseMqttTopics(device.mqttTopics),
     dashboardWidgets: parseDashboardWidgets(device.dashboardWidgets),
 });
@@ -80,63 +88,49 @@ const castGenericValue = (
     row: GenericPropertyRow
 ): { ok: true; value: string | number | boolean } | { ok: false; error: string } => {
     const key = row.key.trim();
-    switch (row.type) {
-        case PropertyType.INT: {
-            const n = parseInt(row.value, 10);
-            if (Number.isNaN(n)) {
-                return { ok: false, error: `Invalid value for "${key}" (int expected).` };
-            }
-            return { ok: true, value: n };
-        }
-        case PropertyType.FLOAT: {
-            const normalized = row.value.replace(",", ".");
-            const n = parseFloat(normalized);
-            if (Number.isNaN(n)) {
-                return { ok: false, error: `Invalid value for "${key}" (float expected).` };
-            }
-            return { ok: true, value: n };
-        }
-        case PropertyType.BOOL: {
-            const lower = row.value.toLowerCase();
-            if (lower !== "true" && lower !== "false") {
-                return { ok: false, error: `Invalid value for "${key}" (true/false expected).` };
-            }
-            return { ok: true, value: lower === "true" };
-        }
-        case PropertyType.STRING:
-        default:
-            return { ok: true, value: row.value };
-    }
+    return castPropertyValue(row.type, row.value, key);
 };
 
 export const buildDeviceTypePropertiesPayload = (
-    devicePropertiesRows: PropertyRow[],
-    genericPropertiesRows: GenericPropertyRow[]
+    propertyRows: DeviceTypePropertyEditorRow[]
 ): BuildPropertiesPayloadResult => {
     const deviceProperties: DevicePropertyMap = {};
     const genericProperties: SavedProperties = {};
+    const seenKeys = new Set<string>();
 
-    for (const row of devicePropertiesRows) {
+    for (const row of propertyRows) {
         const key = row.key.trim();
         if (!key) continue;
-        deviceProperties[key] = {
+        if (seenKeys.has(key)) {
+            return { ok: false, error: `Duplicate property key "${key}".` };
+        }
+        seenKeys.add(key);
+
+        if (row.isGlobal) {
+            const cast = castGenericValue(row);
+            if (!cast.ok) return cast;
+
+            genericProperties[key] = {
+                type: row.type,
+                ...(row.label?.trim() ? { label: row.label.trim() } : {}),
+                global: true,
+                value: cast.value,
+            };
+            continue;
+        }
+
+        const nextDefinition: DevicePropertyMap[string] = {
             type: row.type,
+            ...(row.label?.trim() ? { label: row.label.trim() } : {}),
             sensitive: row.type === PropertyType.STRING && Boolean(row.sensitive),
             visible: row.visible !== false,
         };
-    }
-
-    for (const row of genericPropertiesRows) {
-        const key = row.key.trim();
-        if (!key) continue;
-
-        const cast = castGenericValue(row);
-        if (!cast.ok) return cast;
-
-        genericProperties[key] = {
-            type: row.type,
-            value: cast.value,
-        };
+        if (row.value.trim() !== "") {
+            const cast = castPropertyValue(row.type, row.value, key);
+            if (!cast.ok) return cast;
+            nextDefinition.defaultValue = cast.value;
+        }
+        deviceProperties[key] = nextDefinition;
     }
 
     return {

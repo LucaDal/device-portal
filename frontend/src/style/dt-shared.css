@@ -36,6 +36,8 @@
     border-color: transparent;
     border-bottom: 2px solid transparent;
     justify-content: flex-start;
+    user-select: none;
+    -webkit-tap-highlight-color: rgba(96, 165, 250, 0.16);
 }
 
 .dt-tabs .dt-btn:not(.dt-btn-primary) {
@@ -181,6 +183,8 @@
     background-color: #111827;
     color: #f3f4f6;
     transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: rgba(96, 165, 250, 0.16);
 }
 
 .dt-btn:hover {

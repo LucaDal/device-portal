@@ -1,5 +1,5 @@
 import { DB } from "../config/database";
-import { parseDevicePropertyMap } from "@shared/types/properties";
+import { parseDevicePropertyMap, parseSavedPropertyMap } from "@shared/types/properties";
 import {
     parseDeviceTypeDashboardWidgets,
     parseDeviceTypeMqttTopics,
@@ -141,7 +141,7 @@ export const DeviceTypeController = {
                 const parsed = typeof genericPropertiesInput === "string"
                     ? JSON.parse(genericPropertiesInput)
                     : genericPropertiesInput;
-                genericProperties = JSON.stringify(parsed ?? {});
+                genericProperties = JSON.stringify(parseSavedPropertyMap(parsed));
             } catch {
                 return res
                     .status(400)

@@ -11,10 +11,11 @@ const Sidebar = () => {
     const items = [
         { to: "/", label: "Home", enabled: true },
         { to: "/devices", label: "Devices", enabled: true },
-        { to: "/add-device", label: "Add Device", enabled: true },
-        { to: "/settings", label: "Settings", enabled: true },
-        { to: "/users", label: "Users", enabled: user.role === ROLES.ADMIN },
         { to: "/device-types", label: "Device Types", enabled: user.role === ROLES.ADMIN },
+        { to: "/default-properties", label: "Default Properties", enabled: user.role === ROLES.ADMIN },
+        { to: "/users", label: "Users", enabled: user.role === ROLES.ADMIN },
+        { to: "/request-logs", label: "Request Logs", enabled: user.role === ROLES.ADMIN || user.role === ROLES.DEV },
+        { to: "/settings", label: "Settings", enabled: true },
     ];
 
     return (

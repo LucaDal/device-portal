@@ -171,6 +171,8 @@
     color: #d1d5db;
     text-align: left;
     cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: rgba(56, 189, 248, 0.16);
 }
 
 .home-device-tab:hover,

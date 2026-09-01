@@ -555,10 +555,10 @@ device type topic catalog.
 Compatibility note:
 - existing `deviceProperties` without `notNull` remain required;
 - `mqttTopics` are joined only in the API response for devices;
-- on first startup, legacy `dashboardWidgets` and `device_widget_bindings` data are merged into
-  `device_widgets`, then the legacy column and table are removed transactionally;
-- after this forward migration, older backend versions that require `dashboardWidgets` cannot use
-  the migrated database. Back up the SQLite file before deploying if rollback is required.
+- `device_widgets` is the only supported widget storage; databases must already use the current
+  schema before starting this backend;
+- older backend versions that require Device Type widget catalogs are not compatible with the
+  current database. Back up the SQLite file before deploying if rollback is required.
 
 ## OTA API
 Sensitive device identifiers are passed via headers, not in URL parameters or request bodies.

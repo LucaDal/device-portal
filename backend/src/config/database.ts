@@ -1,12 +1,6 @@
 import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
-import {
-    DashboardWidgetValue,
-    DeviceDashboardWidget,
-    isDashboardWidgetValue,
-    parseDeviceDashboardWidgets,
-} from "@shared/types/device_type_mqtt";
 import { ensureAdminUser } from "./bootstrap";
 
 // Prefer user-provided DB path; fall back to a writable path inside the app directory
@@ -223,124 +217,6 @@ const deviceTypeColumns = DB.prepare("PRAGMA table_info(device_types)").all() as
 if (!deviceTypeColumns.some((c) => c.name === "mqttTopics")) {
     DB.exec("ALTER TABLE device_types ADD COLUMN mqttTopics TEXT DEFAULT '[]'");
 }
-
-type LegacyWidgetBindingRow = {
-    device_code: string;
-    widget_id: string;
-    topic_key: string | null;
-    state_topic_key: string | null;
-    state_value_path: string | null;
-    publish_value: string | null;
-    on_value: string | null;
-    off_value: string | null;
-};
-
-function tableExists(tableName: string): boolean {
-    return Boolean(DB.prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"
-    ).get(tableName));
-}
-
-function parseLegacyScalar(raw: string | null): DashboardWidgetValue | undefined {
-    if (raw === null) return undefined;
-    try {
-        const value = JSON.parse(raw);
-        return isDashboardWidgetValue(value) ? value : undefined;
-    } catch {
-        return undefined;
-    }
-}
-
-function mergeLegacyWidget(
-    widget: DeviceDashboardWidget,
-    binding?: LegacyWidgetBindingRow
-): DeviceDashboardWidget {
-    if (!binding) return widget;
-    const publishValue = parseLegacyScalar(binding.publish_value);
-    const onValue = parseLegacyScalar(binding.on_value);
-    const offValue = parseLegacyScalar(binding.off_value);
-    return {
-        ...widget,
-        ...(binding.topic_key ? { topicKey: binding.topic_key } : {}),
-        ...(binding.state_topic_key ? { stateTopicKey: binding.state_topic_key } : {}),
-        ...(binding.state_value_path ? { stateValuePath: binding.state_value_path } : {}),
-        ...(typeof publishValue !== "undefined" ? { publishValue } : {}),
-        ...(typeof onValue !== "undefined" ? { onValue } : {}),
-        ...(typeof offValue !== "undefined" ? { offValue } : {}),
-    };
-}
-
-function migrateLegacyDeviceWidgets() {
-    const hasLegacyCatalog = deviceTypeColumns.some((column) => column.name === "dashboardWidgets");
-    const hasLegacyBindings = tableExists("device_widget_bindings");
-    if (!hasLegacyCatalog && !hasLegacyBindings) return;
-
-    DB.transaction(() => {
-        const bindings = hasLegacyBindings
-            ? DB.prepare("SELECT * FROM device_widget_bindings").all() as LegacyWidgetBindingRow[]
-            : [];
-        const bindingByDeviceAndWidget = new Map(
-            bindings.map((binding) => [`${binding.device_code}\u0000${binding.widget_id}`, binding])
-        );
-        const insertWidget = DB.prepare(`
-            INSERT OR IGNORE INTO device_widgets (
-                device_code,
-                widget_id,
-                label,
-                kind,
-                topic_key,
-                position,
-                state_topic_key,
-                state_value_path,
-                publish_value,
-                on_value,
-                off_value,
-                payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        if (hasLegacyCatalog) {
-            const rows = DB.prepare(`
-                SELECT d.code AS deviceCode, dt.dashboardWidgets
-                FROM devices d
-                JOIN device_types dt ON dt.id = d.device_type_id
-            `).all() as Array<{ deviceCode: string; dashboardWidgets?: string | null }>;
-
-            for (const row of rows) {
-                const catalogWidgets = parseDeviceDashboardWidgets(row.dashboardWidgets);
-                for (const [position, catalogWidget] of catalogWidgets.entries()) {
-                    const binding = bindingByDeviceAndWidget.get(
-                        `${row.deviceCode}\u0000${catalogWidget.id}`
-                    );
-                    const widget = mergeLegacyWidget(catalogWidget, binding);
-                    insertWidget.run(
-                        row.deviceCode,
-                        widget.id,
-                        widget.label,
-                        widget.kind,
-                        widget.topicKey,
-                        position,
-                        widget.stateTopicKey || null,
-                        widget.stateValuePath || null,
-                        typeof widget.publishValue === "undefined" ? null : JSON.stringify(widget.publishValue),
-                        typeof widget.onValue === "undefined" ? null : JSON.stringify(widget.onValue),
-                        typeof widget.offValue === "undefined" ? null : JSON.stringify(widget.offValue),
-                        widget.payload ? JSON.stringify(widget.payload) : null
-                    );
-                }
-            }
-        }
-
-        if (hasLegacyBindings) {
-            DB.exec("DROP TABLE device_widget_bindings");
-        }
-        if (hasLegacyCatalog) {
-            DB.exec("ALTER TABLE device_types DROP COLUMN dashboardWidgets");
-        }
-    })();
-}
-
-migrateLegacyDeviceWidgets();
 
 const mqttAclColumns = DB.prepare("PRAGMA table_info(mqtt_acl_rules)").all() as Array<{ name: string }>;
 if (!mqttAclColumns.some((c) => c.name === "source")) {

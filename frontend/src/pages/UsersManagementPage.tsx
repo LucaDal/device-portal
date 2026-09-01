@@ -188,12 +188,14 @@ export default function UsersManagementPage() {
                 message={error}
                 inlineClassName="users-alert users-alert-error"
                 title="User management"
+                onDismiss={() => setError(null)}
             />
             <ErrorBanner
                 message={successMessage}
                 variant="success"
                 inlineClassName="users-alert users-alert-success"
                 title="Done"
+                onDismiss={() => setSuccessMessage(null)}
             />
 
             <section className="users-card">
@@ -228,6 +230,8 @@ export default function UsersManagementPage() {
                     <ErrorBanner
                         message={`Invitation created for ${inviteResult.email} (${inviteResult.role}). Temporary password: ${inviteResult.temporaryPassword}`}
                         variant="success"
+                        display="inline"
+                        durationMs={null}
                         inlineClassName="users-alert users-alert-success"
                         title={`Expires ${new Date(inviteResult.expiresAt).toLocaleString()}`}
                     />

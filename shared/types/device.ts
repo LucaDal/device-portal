@@ -20,12 +20,12 @@ export interface DeviceWithRelations {
     type_deviceProperties?: string | Record<string, unknown> | null;
     type_genericProperties?: string | Record<string, unknown> | null;
     type_mqttTopics?: string | Record<string, unknown>[] | null;
-    type_dashboardWidgets?: string | Record<string, unknown>[] | null;
     device_properties?: string | Record<string, unknown> | null;
 }
 
 export interface DeviceProvisioningResult extends DeviceWithRelations {
     secret_code: string;
+    cloned_from_code?: string;
 }
 
 export interface DeviceShareRow {

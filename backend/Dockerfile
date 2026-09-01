@@ -1,42 +1,49 @@
-FROM node:20-slim AS builder
+# syntax=docker/dockerfile:1.7
+
+ARG NODE_VERSION=20
+
+# TypeScript output is architecture-independent, so build it on the host platform.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-slim AS builder
 
 WORKDIR /app/backend
 
-# Install backend dependencies
+COPY backend/package*.json ./
+RUN --mount=type=cache,target=/root/.npm \
+  npm ci --ignore-scripts
+
+COPY backend/tsconfig.json ./
+COPY backend/src ./src
+COPY shared /app/shared
+
+RUN npm run build
+
+# Install production modules once for each target architecture. bcrypt and
+# better-sqlite3 provide prebuilt binaries for the supported Node platforms.
+FROM node:${NODE_VERSION}-slim AS production-dependencies
+
+WORKDIR /app/backend
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
+
 COPY backend/package*.json ./
-# Force native builds (e.g., bcrypt) for the target arch
 ENV npm_config_python=/usr/bin/python3
-ENV npm_config_build_from_source=true
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+  npm ci --omit=dev
 
-# Copy source code
-COPY backend ./
-WORKDIR /app
-COPY shared ./shared
+FROM node:${NODE_VERSION}-slim
 
-# Build TypeScript and prune dev deps
-WORKDIR /app/backend
-RUN npm run build
-RUN npm prune --omit=dev
-
-FROM node:20-slim
 WORKDIR /app/backend
 ENV NODE_ENV=production
 
-COPY --from=builder /app/backend/package*.json ./
-COPY --from=builder /app/backend/node_modules ./node_modules
-COPY --from=builder /app/backend/dist ./dist
-
-# Ensure native modules (e.g., bcrypt) are built for the target arch in the final image
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ mosquitto-clients ca-certificates \
-  && npm_config_python=/usr/bin/python3 npm_config_build_from_source=true \
-       npm rebuild bcrypt better-sqlite3 --build-from-source \
-  && apt-get purge -y python3 make g++ \
+  && apt-get install -y --no-install-recommends mosquitto-clients ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+
+COPY --from=production-dependencies /app/backend/package*.json ./
+COPY --from=production-dependencies /app/backend/node_modules ./node_modules
+COPY --from=builder /app/backend/dist ./dist
 
 # Provide runtime alias for "@shared/*" imports using compiled JS output
 RUN ln -s /app/backend/dist/shared /app/backend/node_modules/@shared

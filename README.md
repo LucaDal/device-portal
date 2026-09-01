@@ -309,6 +309,7 @@ How it works:
 - the browser opens one SSE connection for the logged-in user;
 - the backend reads the user's allowed `subscribe` and `all` ACL topic patterns;
 - the backend starts one shared `mosquitto_sub` process for the active topic set;
+- subscriber output is length-framed, so JSON payloads containing newlines are preserved;
 - multiple browsers/users reuse the same subscriber process when they need the same topics;
 - when the last client disconnects, unused topic subscriptions are removed and the subscriber stops if no topics remain.
 
@@ -375,24 +376,34 @@ Example Settings values:
 - `Client certificate path`: `/etc/device-portal/mqtt/client.crt`
 - `Client key path`: `/etc/device-portal/mqtt/client.key`
 
-### Device type MQTT topics and widgets
-Device types store two MQTT dashboard fields:
-- `mqttTopics`: the admin-defined topic catalog for that device type;
-- `dashboardWidgets`: the admin-defined widget catalog that points to topic keys.
+### Device type properties and MQTT topics
+Device Types define reusable device properties and the `mqttTopics` catalog. Dashboard widgets are
+not part of a Device Type: every device owns its widget definitions independently.
+
+A `deviceProperties` definition supports `notNull`:
+
+- omitted or `true`: the value is required (the backward-compatible default);
+- `false`: the Devices form accepts an empty value and removes that property from the device data.
+- boolean properties are always non-null and default to `false` unless an explicit `true` default is configured.
+
+This flag lives in the existing JSON column, so no property-table migration is required.
+
+### Device cloning
+
+Administrators can optionally select an existing device while creating a new one. `POST /devices`
+accepts `clone_from_code` together with the new `code` and `device_type_id`. The source and target
+must use the same Device Type.
+
+Cloning copies saved device properties (including sensitive encrypted values) and the complete
+per-device widget configuration. The new device always receives a new secret; ownership,
+activation, shares and invitations come from the creation form or start empty and are never copied.
+The device, properties and widgets are inserted in one SQLite transaction.
 
 Topic rows contain:
 - `key`: stable internal topic key, for example `relayCommand`;
 - `topic`: MQTT topic or template; required unless `linkedTopic` is used;
 - `action`: `publish`, `subscribe`, or `all`.
 - `linkedTopic`: optional reference to another device type topic.
-
-Widget rows contain:
-- `id`: stable widget id;
-- `label`: UI label;
-- `kind`: `text`, `value`, `switch`, `input`, or `button`;
-- `topicKey`: key of the MQTT topic used by the widget;
-- `publishValue`: optional value sent by a button widget;
-- `payload`: optional object payload for publish actions.
 
 Topic templates can use these placeholders:
 - `{deviceCode}`
@@ -463,7 +474,22 @@ ACL regeneration runs when:
 - an admin updates a device type, because topic changes can affect existing devices;
 - device ownership is revoked, so owner-based topic templates are recalculated.
 
-Example widget catalog:
+### Per-device dashboard widgets
+
+Widget definitions are stored in `device_widgets`, keyed by `(device_code, widget_id)`. A widget row
+contains its complete portable definition:
+
+- `id`: stable widget id;
+- `label`: UI label;
+- `kind`: `text`, `value`, `switch`, `input`, or `button`;
+- `topicKey`: key from the device's Device Type MQTT topic catalog;
+- `stateTopicKey`: optional topic key used for live state;
+- `stateValuePath`: optional RFC 6901 JSON Pointer used for state and scalar commands;
+- `publishValue`: optional scalar sent by a button;
+- `onValue` and `offValue`: optional switch values;
+- `payload`: optional object payload for button actions.
+
+Example widget definition:
 
 ```json
 [
@@ -477,10 +503,62 @@ Example widget catalog:
 ]
 ```
 
+Web and future mobile clients use the same authenticated, versioned JSON API. Responses include
+`schemaVersion: 1`; clients should select their decoder from this value before interpreting widget
+kinds and fields.
+
+- `GET /devices/:code/widgets` returns runtime widgets. MQTT configuration details are included only
+  for an authorized admin or developer. Switch runtime data includes its effective `onValue` and
+  `offValue`, so web and mobile clients can interpret custom states without hardcoded values.
+- `PUT /devices/:code/widgets` replaces the device's widget definitions. Admin can configure
+  every device; developer can configure only owned or shared devices.
+- `POST /devices/:code/widgets/:widgetId/action` executes a button, switch, or input action.
+
+Switch action example:
+
+```json
+{
+  "state": true
+}
+```
+
+The backend resolves device, widget, topic, and configured payload. It then uses the same
+authenticated MQTT publishing path and ACL checks as `/mqtt/session-publish`; clients cannot provide
+an arbitrary topic or payload for a widget action.
+
+A widget can define `stateTopicKey` and `stateValuePath`. The path is an RFC 6901 JSON Pointer
+evaluated against the MQTT `content` received by the realtime stream. For example, `/relay/enabled`
+reads `true` from:
+
+```json
+{
+  "relay": {
+    "enabled": true
+  }
+}
+```
+
+For switches, clients compare the extracted value with the effective `onValue` and `offValue`.
+Values matching neither configuration are ignored, so an unknown payload does not change the last
+valid switch state.
+
+The backend also uses `stateValuePath` when building scalar widget commands. For example, a switch
+value `spento` is published as `{ "state": "spento" }` for `/state`, and as
+`{ "state": { "enabled": "spento" } }` for `/state/enabled`. Without a pointer, the backward-compatible
+payload remains `{ "value": "spento" }`. An explicit object payload defined for a button is preserved.
+
+When `stateTopicKey` points to a topic that the device normally only subscribes to, generated ACLs
+are extended for that device widget: the device receives publish access and authorized users
+receive subscribe access. This supports command and state on the same topic without changing the
+device type topic catalog.
+
 Compatibility note:
-- existing `deviceProperties` continue to work unchanged;
+- existing `deviceProperties` without `notNull` remain required;
 - `mqttTopics` are joined only in the API response for devices;
-- `dashboardWidgets` continue to use `topicKey` for web/mobile UI widgets.
+- on first startup, legacy `dashboardWidgets` and `device_widget_bindings` data are merged into
+  `device_widgets`, then the legacy column and table are removed transactionally;
+- after this forward migration, older backend versions that require `dashboardWidgets` cannot use
+  the migrated database. Back up the SQLite file before deploying if rollback is required.
 
 ## OTA API
 Sensitive device identifiers are passed via headers, not in URL parameters or request bodies.
@@ -533,4 +611,5 @@ curl -X POST "http://127.0.0.1:3000/ota/upload" \
 - DB file missing: create the `DB_PATH_HOST` directory before starting the stack.
 - EMQX ACL denies a device: verify `MQTT_HTTP_AUTH_SECRET` on both sides and confirm the device code matches the MQTT `clientId`.
 - EMQX ACL denies a user: verify EMQX sends `username` and that the username matches the user's email.
-- Realtime dashboard does not update: verify `mosquitto_sub` is installed in the API runtime and MQTT broker settings are configured.
+- Realtime dashboard does not update: verify `mosquitto_sub` is installed in the API runtime, MQTT broker settings are configured, and the configured backend MQTT account can subscribe to the widget state topics. Publish permission alone is not sufficient.
+- A widget marked `waiting` has an open SSE connection but has not received a matching MQTT state yet. A widget is marked `live` only after a message matching its resolved state topic has arrived and its JSON Pointer has returned a value.

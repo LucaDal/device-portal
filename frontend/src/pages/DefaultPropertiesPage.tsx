@@ -220,8 +220,12 @@ export default function DefaultPropertiesPage() {
                 )}
             </section>
 
-            <ErrorBanner message={error} />
-            {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            <ErrorBanner
+                message={successMessage}
+                variant="success"
+                onDismiss={() => setSuccessMessage(null)}
+            />
         </div>
     );
 }

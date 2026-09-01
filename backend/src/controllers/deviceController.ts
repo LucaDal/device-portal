@@ -90,10 +90,12 @@ function filterPropertiesByDefinitions(
 function mergePropertiesForSchema(
     currentProperties: SavedProperties,
     nextProperties: SavedProperties,
-    schema: DevicePropertyMap
+    schema: DevicePropertyMap,
+    clearedKeys: Set<string>
 ): SavedProperties {
     const merged: SavedProperties = {};
     for (const key of Object.keys(schema)) {
+        if (clearedKeys.has(key)) continue;
         if (nextProperties[key]) {
             merged[key] = nextProperties[key];
             continue;
@@ -108,11 +110,20 @@ function mergePropertiesForSchema(
 function normalizePropertiesForSchema(
     properties: SavedProperties,
     schema: DevicePropertyMap
-): { ok: true; properties: SavedProperties } | { ok: false; error: string } {
+): { ok: true; properties: SavedProperties; clearedKeys: Set<string> } | { ok: false; error: string } {
     const out: SavedProperties = {};
+    const clearedKeys = new Set<string>();
     for (const [key, definition] of Object.entries(schema)) {
         const entry = properties[key];
         if (!entry || typeof entry !== "object") continue;
+        const isBlank = typeof entry.value === "string" && entry.value.trim() === "";
+        if (isBlank) {
+            if (definition.notNull !== false) {
+                return { ok: false, error: `Property "${key}" cannot be empty.` };
+            }
+            clearedKeys.add(key);
+            continue;
+        }
         const cast = castPropertyValue(definition.type, entry.value, key);
         if (!cast.ok) return cast;
         out[key] = {
@@ -120,7 +131,7 @@ function normalizePropertiesForSchema(
             value: cast.value,
         };
     }
-    return { ok: true, properties: out };
+    return { ok: true, properties: out, clearedKeys };
 }
 
 export const DeviceController = {
@@ -141,7 +152,6 @@ export const DeviceController = {
                 dt.deviceProperties AS type_deviceProperties,
                 dt.genericProperties AS type_genericProperties,
                 dt.mqttTopics AS type_mqttTopics,
-                dt.dashboardWidgets AS type_dashboardWidgets,
                 CASE
                     WHEN d.owner_id = ? THEN dp.properties
                     ELSE NULL
@@ -280,15 +290,36 @@ export const DeviceController = {
 
     // POST /devices
     create(req: any, res: any) {
-        const { code, device_type_id, owner_id, owner_email, activated } = req.body;
+        const { owner_id, owner_email, activated } = req.body;
+        const code = String(req.body?.code || "").trim();
+        const deviceTypeId = String(req.body?.device_type_id || "").trim();
+        const cloneFromCode = String(req.body?.clone_from_code || "").trim();
 
-        if (!code || !device_type_id) {
+        if (!code || !deviceTypeId) {
             return res
                 .status(400)
                 .json({ error: "code and device_type_id are required" });
         }
 
         try {
+            if (cloneFromCode === code) {
+                return res.status(400).json({ error: "A device cannot be cloned onto itself" });
+            }
+
+            if (cloneFromCode) {
+                const cloneSource = DB.prepare(
+                    "SELECT device_type_id FROM devices WHERE code = ?"
+                ).get(cloneFromCode) as { device_type_id: string } | undefined;
+                if (!cloneSource) {
+                    return res.status(400).json({ error: "Clone source device not found" });
+                }
+                if (cloneSource.device_type_id !== deviceTypeId) {
+                    return res.status(400).json({
+                        error: "Clone source and new device must use the same device type",
+                    });
+                }
+            }
+
             let resolvedOwnerId: number | null = owner_id ? Number(owner_id) : null;
             const normalizedOwnerEmail = normalizeEmail(owner_email || "");
             const deviceSecret = generateDeviceSecret();
@@ -303,22 +334,76 @@ export const DeviceController = {
                 resolvedOwnerId = ownerUser.id;
             }
 
-            DB.prepare(`
-INSERT INTO devices (code, device_type_id, owner_id, activated, device_secret_hash)
-VALUES (?, ?, ?, ?, ?)
-`).run(
-                code,
-                device_type_id,
-                resolvedOwnerId,
-                activated ? 1 : 0,
-                deviceSecretHash
-            );
+            DB.transaction(() => {
+                DB.prepare(`
+                    INSERT INTO devices (code, device_type_id, owner_id, activated, device_secret_hash)
+                    VALUES (?, ?, ?, ?, ?)
+                `).run(
+                    code,
+                    deviceTypeId,
+                    resolvedOwnerId,
+                    activated ? 1 : 0,
+                    deviceSecretHash
+                );
 
-            // riga iniziale per le properties del device
-            DB.prepare(`
-INSERT INTO device_properties (device_code, properties)
-VALUES (?, ?)
-`).run(code, "{}");
+                if (cloneFromCode) {
+                    DB.prepare(`
+                        INSERT INTO device_properties (device_code, properties)
+                        VALUES (
+                            ?,
+                            COALESCE((
+                                SELECT properties
+                                FROM device_properties
+                                WHERE device_code = ?
+                                ORDER BY id ASC
+                                LIMIT 1
+                            ), '{}')
+                        )
+                    `).run(code, cloneFromCode);
+
+                    DB.prepare(`
+                        INSERT INTO device_widgets (
+                            device_code,
+                            widget_id,
+                            label,
+                            kind,
+                            topic_key,
+                            position,
+                            state_topic_key,
+                            state_value_path,
+                            publish_value,
+                            on_value,
+                            off_value,
+                            payload,
+                            created_at,
+                            updated_at
+                        )
+                        SELECT
+                            ?,
+                            widget_id,
+                            label,
+                            kind,
+                            topic_key,
+                            position,
+                            state_topic_key,
+                            state_value_path,
+                            publish_value,
+                            on_value,
+                            off_value,
+                            payload,
+                            CURRENT_TIMESTAMP,
+                            CURRENT_TIMESTAMP
+                        FROM device_widgets
+                        WHERE device_code = ?
+                    `).run(code, cloneFromCode);
+                } else {
+                    DB.prepare(`
+                        INSERT INTO device_properties (device_code, properties)
+                        VALUES (?, ?)
+                    `).run(code, "{}");
+                }
+            })();
+
             syncGeneratedMqttAclRulesForDevice(code);
             syncGeneratedMqttUserAclRulesForAllUsers();
 
@@ -336,6 +421,7 @@ WHERE d.code = ?
             res.status(201).json({
                 ...created,
                 secret_code: deviceSecret,
+                ...(cloneFromCode ? { cloned_from_code: cloneFromCode } : {}),
             });
         } catch (e: any) {
             if (e.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || e.code === "SQLITE_CONSTRAINT_UNIQUE") {
@@ -426,7 +512,12 @@ WHERE d.code = ?
                 return res.status(400).json({ error: normalizedProps.error });
             }
             const encryptedProps = encryptSensitiveDeviceProperties(normalizedProps.properties, schema);
-            const mergedProps = mergePropertiesForSchema(currentProps, encryptedProps, schema);
+            const mergedProps = mergePropertiesForSchema(
+                currentProps,
+                encryptedProps,
+                schema,
+                normalizedProps.clearedKeys
+            );
             propertiesJson = JSON.stringify(mergedProps);
         } catch (err: any) {
             return res.status(500).json({

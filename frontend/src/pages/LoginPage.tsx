@@ -38,8 +38,8 @@ export default function LoginPage() {
 
                 <ErrorBanner
                     message={error}
-
                     inlineClassName="auth-error"
+                    onDismiss={() => setError("")}
                 />
 
                 <form onSubmit={handleSubmit}>

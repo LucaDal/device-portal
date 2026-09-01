@@ -4,9 +4,13 @@ import {
     MQTT_ACL_ACTIONS,
     MQTT_ACL_PERMISSION,
 } from "@shared/constants/mqtt";
+import { mqttTopicMatches } from "@shared/types/mqtt";
 import { DB } from "../config/database";
 import { appendBrokerAuthArgs, loadBrokerSettings, validateBrokerTlsSettings } from "../utils/mqttBrokerSettings";
-import { mqttTopicMatches } from "../utils/mqttUserAcl";
+import {
+    MOSQUITTO_STREAM_FORMAT,
+    MosquittoStreamParser,
+} from "../utils/mosquittoStreamParser";
 import { MQTT_USER_ACL_SYNCED_EVENT, mqttAclEvents } from "./mqttAclEvents";
 
 type MqttStreamMessage = {
@@ -41,7 +45,8 @@ let subscriberGeneration = 0;
 let activeTopicKey = "";
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
-let stdoutBuffer = "";
+const streamParser = new MosquittoStreamParser();
+let subscriberStderr = "";
 
 function getReadableTopicPatternsForUser(userId: number): string[] {
     const rows = DB.prepare(`
@@ -131,12 +136,7 @@ function deliverMessage(message: MqttStreamMessage) {
     }
 }
 
-function parseMosquittoSubLine(line: string): MqttStreamMessage | null {
-    const separatorIndex = line.indexOf(" ");
-    const topic = separatorIndex === -1 ? line.trim() : line.slice(0, separatorIndex).trim();
-    const payload = separatorIndex === -1 ? "" : line.slice(separatorIndex + 1);
-    if (!topic) return null;
-
+function createStreamMessage(topic: string, payload: string): MqttStreamMessage {
     return {
         topic,
         payload,
@@ -146,15 +146,14 @@ function parseMosquittoSubLine(line: string): MqttStreamMessage | null {
 }
 
 function handleSubscriberStdout(chunk: Buffer) {
-    stdoutBuffer += chunk.toString("utf8");
-    const lines = stdoutBuffer.split(/\r?\n/);
-    stdoutBuffer = lines.pop() || "";
-
-    for (const line of lines) {
-        const message = parseMosquittoSubLine(line);
-        if (message) {
-            deliverMessage(message);
+    try {
+        for (const record of streamParser.push(chunk)) {
+            deliverMessage(createStreamMessage(record.topic, record.payload));
         }
+    } catch (err: any) {
+        const message = err?.message || "MQTT subscriber returned malformed output";
+        console.error(message);
+        broadcastServiceError(message);
     }
 }
 
@@ -172,7 +171,9 @@ function buildSubscriberArgs(topicPatterns: string[]) {
         String(settings.port),
         "-i",
         `${settings.clientIdPrefix}-sse-${process.pid}-${Date.now()}`,
-        "-v",
+        "-N",
+        "-F",
+        MOSQUITTO_STREAM_FORMAT,
     ];
 
     for (const pattern of topicPatterns) {
@@ -187,7 +188,8 @@ function stopSubscriber() {
     if (!subscriber) return;
     subscriber.kill("SIGTERM");
     subscriber = null;
-    stdoutBuffer = "";
+    streamParser.reset();
+    subscriberStderr = "";
 }
 
 function scheduleSubscriberRefresh(delayMs = SUBSCRIBER_RESTART_DEBOUNCE_MS) {
@@ -231,11 +233,15 @@ function refreshSubscriber(force = false) {
 
     try {
         const args = buildSubscriberArgs(topicPatterns);
+        subscriberStderr = "";
         subscriber = spawn("mosquitto_sub", args);
 
         subscriber.stdout.on("data", handleSubscriberStdout);
         subscriber.stderr.on("data", (chunk) => {
-            console.error("MQTT subscriber stderr:", String(chunk).trim());
+            const output = String(chunk).trim();
+            if (!output) return;
+            subscriberStderr = `${subscriberStderr}\n${output}`.trim().slice(-2000);
+            console.error("MQTT subscriber stderr:", output);
         });
         subscriber.on("error", (err: any) => {
             if (generation !== subscriberGeneration) return;
@@ -251,7 +257,10 @@ function refreshSubscriber(force = false) {
             if (generation !== subscriberGeneration) return;
             subscriber = null;
             if (topicRefCounts.size > 0) {
-                console.error(`MQTT subscriber exited with code ${code}`);
+                const detail = subscriberStderr || `exit code ${code}`;
+                const message = `MQTT subscription failed: ${detail}`;
+                console.error(message);
+                broadcastServiceError(message);
                 scheduleSubscriberRetry(generation);
             }
         });

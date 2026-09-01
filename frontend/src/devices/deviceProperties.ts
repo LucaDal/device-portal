@@ -23,19 +23,22 @@ export const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRo
 
     return Object.entries(typeDefs).map(([key, def]) => {
         const savedProp = devProps[key];
+        const value = savedProp
+            ? String(savedProp.value)
+            : def.notNull === false || typeof def.defaultValue === "undefined"
+                ? ""
+                : String(def.defaultValue);
+
         return {
             key,
             label: def.label || "",
             type: def.type,
             sensitive: Boolean(def.sensitive),
             visible: def.visible !== false,
+            notNull: def.notNull !== false,
             mqtt: def.mqtt,
             defaultValue: def.defaultValue,
-            value: savedProp
-                ? String(savedProp.value)
-                : typeof def.defaultValue === "undefined"
-                  ? ""
-                  : String(def.defaultValue),
+            value,
         };
     });
 };

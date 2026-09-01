@@ -160,7 +160,7 @@ export default function RequestLogsPage() {
                 )}
             </section>
 
-            <ErrorBanner message={error} />
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
         </div>
     );
 }

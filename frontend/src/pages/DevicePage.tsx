@@ -31,6 +31,7 @@ import {
 import { ROLES, Role } from "@shared/constants/auth";
 import { MqttAclRule } from "@shared/types/mqtt";
 import ErrorBanner from "../components/ErrorBanner";
+import DeviceWidgetsEditor from "../devices/DeviceWidgetsEditor";
 import "../style/DevicePage.css";
 
 const formatDateTime = (value?: string | null): string => {
@@ -50,6 +51,7 @@ const DevicesPage: React.FC = () => {
     const isAdmin = canCreateDevice;
     const showPropertyKey = canSeePropertyKey(user?.role);
     const canViewSecurity = isAdmin;
+    const canConfigureWidgetsByRole = user?.role === ROLES.ADMIN || user?.role === ROLES.DEV;
 
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
     const [devices, setDevices] = useState<DeviceWithRelations[]>([]);
@@ -59,6 +61,7 @@ const DevicesPage: React.FC = () => {
 
     const [code, setCode] = useState("");
     const [deviceTypeId, setDeviceTypeId] = useState<string | "">("");
+    const [cloneFromCode, setCloneFromCode] = useState("");
     const [ownerEmail, setOwnerEmail] = useState("");
     const [activated, setActivated] = useState(false);
     const [newDeviceSecret, setNewDeviceSecret] = useState<string | null>(null);
@@ -151,6 +154,7 @@ const DevicesPage: React.FC = () => {
     const resetNewDeviceForm = () => {
         setCode("");
         setDeviceTypeId("");
+        setCloneFromCode("");
         setOwnerEmail("");
         setActivated(false);
     };
@@ -176,14 +180,20 @@ const DevicesPage: React.FC = () => {
         }
 
         try {
+            const selectedCloneCode = cloneFromCode;
             const created = await createDevice({
                 code: code.trim(),
                 device_type_id: deviceTypeId,
                 owner_email: ownerEmail.trim() || undefined,
                 activated,
+                clone_from_code: selectedCloneCode || undefined,
             }) as DeviceProvisioningResult;
             setNewDeviceSecret(created.secret_code);
-            setSuccessMessage("Device created successfully. Save the secret code now.");
+            setSuccessMessage(
+                selectedCloneCode
+                    ? `Device cloned from ${selectedCloneCode}. Save the new secret code now.`
+                    : "Device created successfully. Save the secret code now."
+            );
             resetNewDeviceForm();
             await fetchAll();
         } catch (err: any) {
@@ -347,6 +357,15 @@ const DevicesPage: React.FC = () => {
         for (const row of propertyRows) {
             const k = row.key.trim();
             if (!k) continue;
+
+            if (row.value.trim() === "") {
+                if (row.notNull !== false) {
+                    setError(`Property "${k}" cannot be empty.`);
+                    return;
+                }
+                propsObj[k] = { type: row.type, value: "" };
+                continue;
+            }
 
             const castResult = castPropertyValue(row.type, row.value, k);
             if (!castResult.ok) {
@@ -520,10 +539,36 @@ const DevicesPage: React.FC = () => {
                             </div>
 
                             <div className="dt-form-group">
+                                <label htmlFor="cloneFromDevice">Clone configuration from (optional)</label>
+                                <select
+                                    id="cloneFromDevice"
+                                    value={cloneFromCode}
+                                    onChange={(e) => {
+                                        const sourceCode = e.target.value;
+                                        setCloneFromCode(sourceCode);
+                                        const source = devices.find((device) => device.code === sourceCode);
+                                        if (source) setDeviceTypeId(source.device_type_id);
+                                    }}
+                                >
+                                    <option value="">Do not clone</option>
+                                    {devices.map((device) => (
+                                        <option key={device.code} value={device.code}>
+                                            {device.code} - {device.device_type_description || device.device_type_id}
+                                        </option>
+                                    ))}
+                                </select>
+                                <small className="dt-help-text">
+                                    Copies saved properties, including sensitive values, and dashboard widgets.
+                                    Ownership, sharing, activation and the device secret are not copied.
+                                </small>
+                            </div>
+
+                            <div className="dt-form-group">
                                 <label htmlFor="deviceType">Device type</label>
                                 <select
                                     id="deviceType"
                                     value={deviceTypeId}
+                                    disabled={Boolean(cloneFromCode)}
                                     onChange={(e) => setDeviceTypeId(e.target.value ? String(e.target.value) : "")}
                                 >
                                     <option value="">Select...</option>
@@ -559,7 +604,6 @@ const DevicesPage: React.FC = () => {
                                 </label>
                             </div>
 
-                            {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
                             {renderDeviceSecretAlert()}
 
                             <button type="submit" className="dt-btn dt-btn-primary">
@@ -588,8 +632,6 @@ const DevicesPage: React.FC = () => {
                                     placeholder="e.g. ABCD-1234-TOKEN"
                                 />
                             </div>
-
-                            {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
 
                             <button
                                 type="submit"
@@ -788,22 +830,28 @@ const DevicesPage: React.FC = () => {
                                                                 <span className="dt-chip">{row.key}</span>
                                                             )}
                                                             {row.sensitive && <span className="dt-chip">sensitive</span>}
+                                                            <span className="dt-chip">
+                                                                {row.notNull === false ? "optional" : "required"}
+                                                            </span>
                                                         </div>
                                                         {row.type === PropertyType.BOOL ? (
-                                                            <label className="dt-small dt-prop-inline-flag">
-                                                                <input
-                                                                    className="dt-check"
-                                                                    type="checkbox"
-                                                                    checked={row.value === "true"}
-                                                                    disabled={!canEditSelectedDevice}
-                                                                    onChange={(e) =>
-                                                                        handlePropertyValueChange(
-                                                                            index,
-                                                                            e.target.checked ? "true" : "false"
-                                                                        )
-                                                                    }
-                                                                />
-                                                            </label>
+                                                            <select
+                                                                value={row.value}
+                                                                disabled={!canEditSelectedDevice}
+                                                                onChange={(e) =>
+                                                                    handlePropertyValueChange(index, e.target.value)
+                                                                }
+                                                            >
+                                                                {row.notNull === false && (
+                                                                    <option value="">
+                                                                        {row.defaultValue === undefined
+                                                                            ? "Not set"
+                                                                            : `Not set (default: ${String(row.defaultValue)})`}
+                                                                    </option>
+                                                                )}
+                                                                <option value="true">true</option>
+                                                                <option value="false">false</option>
+                                                            </select>
                                                         ) : (
                                                             <input
                                                                 type={row.type === PropertyType.STRING ? "text" : "number"}
@@ -814,7 +862,13 @@ const DevicesPage: React.FC = () => {
                                                                 onChange={(e) =>
                                                                     handlePropertyValueChange(index, e.target.value)
                                                                 }
-                                                                placeholder="Value"
+                                                                placeholder={
+                                                                    row.notNull === false && row.defaultValue !== undefined
+                                                                        ? `Optional (default: ${String(row.defaultValue)})`
+                                                                        : row.notNull === false
+                                                                            ? "Optional"
+                                                                            : "Required"
+                                                                }
                                                             />
                                                         )}
                                                     </div>
@@ -831,6 +885,14 @@ const DevicesPage: React.FC = () => {
                                             >
                                                 {savingProps ? "Saving..." : "Save properties"}
                                             </button>
+                                        )}
+
+                                        {canConfigureWidgetsByRole && (
+                                            <DeviceWidgetsEditor
+                                                deviceCode={selectedDevice.code}
+                                                onError={setError}
+                                                onSaved={setSuccessMessage}
+                                            />
                                         )}
 
                                         <div className="dt-divider" />
@@ -968,8 +1030,12 @@ const DevicesPage: React.FC = () => {
                 )}
             </div>
 
-            <ErrorBanner message={error} />
-            {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            <ErrorBanner
+                message={successMessage}
+                variant="success"
+                onDismiss={() => setSuccessMessage(null)}
+            />
         </div>
     );
 };

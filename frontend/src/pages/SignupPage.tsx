@@ -57,8 +57,8 @@ export default function SignupPage() {
 
                 <ErrorBanner
                     message={error}
-
                     inlineClassName="auth-error"
+                    onDismiss={() => setError("")}
                 />
 
                 <form onSubmit={handleSubmit} className="auth-form" noValidate>

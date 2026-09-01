@@ -101,7 +101,7 @@
 }
 
 .device-types-page .dt-prop-row-inline-combined {
-    grid-template-columns: 48px minmax(110px, 1fr) minmax(120px, 1fr) 92px minmax(120px, 1fr) 64px 72px 48px;
+    grid-template-columns: 48px minmax(110px, 1fr) minmax(120px, 1fr) 92px minmax(120px, 1fr) 72px 64px 72px 48px;
 }
 
 .device-types-page .dt-prop-row-inline-generic {
@@ -122,10 +122,6 @@
         64px;
 }
 
-.device-types-page .dt-prop-row-inline-widget {
-    grid-template-columns: minmax(110px, 0.8fr) minmax(130px, 1fr) 130px minmax(140px, 1fr) minmax(120px, 0.8fr) 72px;
-}
-
 .device-types-page .dt-prop-row-inline-device > :nth-child(2) {
     width: 100%;
 }
@@ -144,12 +140,7 @@
 .device-types-page .dt-prop-row-inline-mqtt > :nth-child(2),
 .device-types-page .dt-prop-row-inline-mqtt > :nth-child(3),
 .device-types-page .dt-prop-row-inline-mqtt > :nth-child(4),
-.device-types-page .dt-prop-row-inline-mqtt > :nth-child(5),
-.device-types-page .dt-prop-row-inline-widget > :nth-child(1),
-.device-types-page .dt-prop-row-inline-widget > :nth-child(2),
-.device-types-page .dt-prop-row-inline-widget > :nth-child(3),
-.device-types-page .dt-prop-row-inline-widget > :nth-child(4),
-.device-types-page .dt-prop-row-inline-widget > :nth-child(5) {
+.device-types-page .dt-prop-row-inline-mqtt > :nth-child(5) {
     width: 100%;
 }
 
@@ -160,7 +151,8 @@
 
 .device-types-page .dt-prop-row-inline-combined > :nth-child(1),
 .device-types-page .dt-prop-row-inline-combined > :nth-child(6),
-.device-types-page .dt-prop-row-inline-combined > :nth-child(7) {
+.device-types-page .dt-prop-row-inline-combined > :nth-child(7),
+.device-types-page .dt-prop-row-inline-combined > :nth-child(8) {
     align-self: center;
     justify-self: center;
 }
@@ -186,12 +178,11 @@
     justify-self: end;
 }
 
-.device-types-page .dt-prop-row-inline-combined > :nth-child(8) {
+.device-types-page .dt-prop-row-inline-combined > :nth-child(9) {
     justify-self: end;
 }
 
-.device-types-page .dt-prop-row-inline-mqtt > :nth-child(6),
-.device-types-page .dt-prop-row-inline-widget > :nth-child(6) {
+.device-types-page .dt-prop-row-inline-mqtt > :nth-child(6) {
     justify-self: end;
 }
 
@@ -220,12 +211,13 @@
 .device-types-page .dt-prop-row-inline-device.dt-prop-row-header > :nth-child(4),
 .device-types-page .dt-prop-row-inline-combined.dt-prop-row-header > :nth-child(1),
 .device-types-page .dt-prop-row-inline-combined.dt-prop-row-header > :nth-child(6),
-.device-types-page .dt-prop-row-inline-combined.dt-prop-row-header > :nth-child(7) {
+.device-types-page .dt-prop-row-inline-combined.dt-prop-row-header > :nth-child(7),
+.device-types-page .dt-prop-row-inline-combined.dt-prop-row-header > :nth-child(8) {
     justify-self: center;
 }
 
 .device-types-page .dt-prop-row-inline-device.dt-prop-row-header > :nth-child(5),
-.device-types-page .dt-prop-row-inline-combined.dt-prop-row-header > :nth-child(8) {
+.device-types-page .dt-prop-row-inline-combined.dt-prop-row-header > :nth-child(9) {
     justify-self: end;
 }
 

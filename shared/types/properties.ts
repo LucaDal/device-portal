@@ -15,6 +15,7 @@ export interface PropertyRow {
     global?: boolean;
     sensitive?: boolean;
     visible?: boolean;
+    notNull?: boolean;
     defaultValue?: PropertyPrimitiveValue;
     mqtt?: DevicePropertyMqttConfig;
 }
@@ -24,6 +25,7 @@ export interface DevicePropertyDefinition {
     label?: string;
     sensitive?: boolean;
     visible?: boolean;
+    notNull?: boolean;
     defaultValue?: PropertyPrimitiveValue;
     mqtt?: DevicePropertyMqttConfig;
 }
@@ -121,7 +123,13 @@ export function castPropertyValue(
 
 export function normalizeDevicePropertyDefinition(value: unknown): DevicePropertyDefinition | null {
     if (typeof value === "string" && isPropertyType(value)) {
-        return { type: value, sensitive: false, visible: true };
+        return {
+            type: value,
+            sensitive: false,
+            visible: true,
+            notNull: true,
+            ...(value === PropertyType.BOOL ? { defaultValue: false } : {}),
+        };
     }
     if (value && typeof value === "object" && !Array.isArray(value)) {
         const rawType = (value as any).type;
@@ -129,18 +137,22 @@ export function normalizeDevicePropertyDefinition(value: unknown): DevicePropert
         const label = String((value as any).label || "").trim();
         const sensitive = rawType === PropertyType.STRING && Boolean((value as any).sensitive);
         const visible = (value as any).visible !== false;
+        const notNull = rawType === PropertyType.BOOL || (value as any).notNull !== false;
         const rawMqtt = (value as any).mqtt;
         const mqtt = normalizeDevicePropertyMqttConfig(rawMqtt);
         const hasDefaultValue = Object.prototype.hasOwnProperty.call(value, "defaultValue");
         const defaultValue = hasDefaultValue
             ? castPropertyValue(rawType, (value as any).defaultValue, "defaultValue")
-            : null;
+            : rawType === PropertyType.BOOL
+                ? { ok: true as const, value: false }
+                : null;
         if (defaultValue && !defaultValue.ok) return null;
         return {
             type: rawType,
             ...(label ? { label } : {}),
             sensitive,
             visible,
+            notNull,
             ...(defaultValue?.ok ? { defaultValue: defaultValue.value } : {}),
             ...(mqtt ? { mqtt } : {}),
         };

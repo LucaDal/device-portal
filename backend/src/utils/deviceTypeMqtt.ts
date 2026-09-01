@@ -1,10 +1,12 @@
-import { MQTT_ACL_PERMISSION } from "@shared/constants/mqtt";
+import { MQTT_ACL_ACTIONS, MQTT_ACL_PERMISSION } from "@shared/constants/mqtt";
 import {
     DeviceTypeMqttTopic,
+    getDashboardWidgetStateTopicKey,
     parseDeviceTypeMqttTopics,
 } from "@shared/types/device_type_mqtt";
 import { DB } from "../config/database";
 import { resolveMqttTopicTemplate } from "./mqttTopicTemplate";
+import { loadDeviceWidgets } from "../repositories/deviceWidgetRepository";
 
 type DeviceMqttContext = {
     deviceCode: string;
@@ -155,6 +157,12 @@ export function mapDeviceTypeMqttTopicsToProperties(deviceCode: string): Record<
 
 export function syncGeneratedMqttAclRulesForDevice(deviceCode: string) {
     const topics = resolveDeviceTypeMqttTopicsForDevice(deviceCode);
+    const device = loadDeviceMqttRow(deviceCode);
+    const stateTopicKeys = new Set(
+        loadDeviceWidgets(deviceCode)
+            .map((widget) => getDashboardWidgetStateTopicKey(widget))
+            .filter((key): key is string => Boolean(key))
+    );
 
     DB.transaction(() => {
         DB.prepare(
@@ -184,6 +192,22 @@ export function syncGeneratedMqttAclRulesForDevice(deviceCode: string) {
                 GENERATED_ACL_SOURCE,
                 topic.key
             );
+
+            if (
+                stateTopicKeys.has(topic.key) &&
+                topic.action !== MQTT_ACL_ACTIONS.PUBLISH &&
+                topic.action !== MQTT_ACL_ACTIONS.ALL
+            ) {
+                insert.run(
+                    deviceCode,
+                    MQTT_ACL_ACTIONS.PUBLISH,
+                    topic.resolvedTopic,
+                    MQTT_ACL_PERMISSION.ALLOW,
+                    50,
+                    GENERATED_ACL_SOURCE,
+                    `widget_state:${topic.key}`
+                );
+            }
         }
     })();
 }

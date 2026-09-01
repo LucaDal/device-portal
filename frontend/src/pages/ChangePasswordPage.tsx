@@ -51,10 +51,14 @@ const ChangePasswordPage: React.FC = () => {
 
                 <ErrorBanner
                     message={error}
-
                     inlineClassName="auth-error"
+                    onDismiss={() => setError(null)}
                 />
-                {ok && <div className="auth-success">{ok}</div>}
+                <ErrorBanner
+                    message={ok}
+                    variant="success"
+                    onDismiss={() => setOk(null)}
+                />
 
                 <form onSubmit={handleSubmit}>
                     <label>Current password</label>

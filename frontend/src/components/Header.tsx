@@ -11,7 +11,7 @@ const Header = () => {
                 {user ? (
                     <>
                         <span>{user.email} ({user.role})</span>
-                        <button onClick={logout}>Logout</button>
+                        <button className="app-action-button" onClick={logout}>Logout</button>
                     </>
                 ) : (
                         <Link to="/login">Login</Link>

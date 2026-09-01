@@ -7,6 +7,7 @@ import {
     MQTT_AUTH_RESULT,
     MqttAclAction,
 } from "@shared/constants/mqtt";
+import { mqttTopicMatches } from "@shared/types/mqtt";
 import { MqttBrokerSettings, MqttPublishInput } from "@shared/types/mqtt_publish";
 import { getMqttHttpAuthSecret } from "../config/secrets";
 import { canUserAccessMqttTopic } from "../utils/mqttUserAcl";
@@ -52,28 +53,6 @@ function getAction(payload: any): MqttAclAction {
 
 function getTopic(payload: any): string {
     return String(payload.topic || payload.topic_name || "").trim();
-}
-
-function mqttTopicMatches(pattern: string, topic: string): boolean {
-    const patternParts = pattern.split("/");
-    const topicParts = topic.split("/");
-
-    for (let i = 0, j = 0; i < patternParts.length; i += 1, j += 1) {
-        const p = patternParts[i];
-        const t = topicParts[j];
-
-        if (p === "#") {
-            return i === patternParts.length - 1;
-        }
-        if (p === "+") {
-            if (typeof t === "undefined") return false;
-            continue;
-        }
-        if (typeof t === "undefined" || p !== t) {
-            return false;
-        }
-    }
-    return patternParts.length === topicParts.length;
 }
 
 function allow(res: any) {
@@ -184,7 +163,7 @@ async function publishMqttMessage(
     });
 }
 
-async function publishForAuthenticatedUser(input: MqttPublishInput, authUser: any) {
+export async function publishForAuthenticatedUser(input: MqttPublishInput, authUser: any) {
     const userId = Number(authUser?.id);
     if (!canUserAccessMqttTopic(userId, MQTT_ACL_ACTIONS.PUBLISH, input.topic)) {
         return {

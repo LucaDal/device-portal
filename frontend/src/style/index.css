@@ -57,17 +57,25 @@ html, body {
     color: #60a5fa;
 }
 
-.header nav button {
+.app-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background-color: #2563eb;
     color: #f3f4f6;
     border: none;
     padding: 0.5rem 1rem;
     border-radius: 0.375rem;
     cursor: pointer;
+    font-weight: 500;
+    line-height: 1.6;
+    text-decoration: none;
 }
 
-.header nav button:hover {
+.app-action-button:hover {
     background-color: #3b82f6;
+    color: #f3f4f6;
+    text-decoration: none;
 }
 
 /* ===== Layout ===== */

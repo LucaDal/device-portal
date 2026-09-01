@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { getSchema, updateSchema } from "./adminService";
+import ErrorBanner from "../components/ErrorBanner";
 
 export const SchemaPage: React.FC = () => {
   const [schema, setSchema] = useState<any>(null);
   const [schemaText, setSchemaText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     getSchema()
@@ -18,10 +20,11 @@ export const SchemaPage: React.FC = () => {
   const handleSave = async () => {
     try {
       setError(null);
+      setSuccessMessage(null);
       const parsed = JSON.parse(schemaText);
       await updateSchema(parsed);
       setSchema(parsed);
-      alert("Schema salvato");
+      setSuccessMessage("Schema salvato.");
     } catch (err: any) {
       setError(err?.error || "JSON non valido o save error");
     }
@@ -30,7 +33,12 @@ export const SchemaPage: React.FC = () => {
   return (
     <div>
       <h2>Admin: Modifica Schema</h2>
-      {error && <p style={{ color: "red" }}>{error}</p>}
+      <ErrorBanner message={error} onDismiss={() => setError(null)} />
+      <ErrorBanner
+        message={successMessage}
+        variant="success"
+        onDismiss={() => setSuccessMessage(null)}
+      />
       <textarea
         rows={20}
         cols={80}

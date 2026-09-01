@@ -8,6 +8,11 @@ import {
 import { DeviceType } from "@shared/types/device_type";
 import { MqttAclRule } from "@shared/types/mqtt";
 import { MqttPublishInput } from "@shared/types/mqtt_publish";
+import {
+    DeviceDashboardWidgetActionInput,
+    DeviceDashboardWidget,
+    DeviceDashboardWidgetsResponse,
+} from "@shared/types/device_type_mqtt";
 
 const DT_URL = "/device-types";
 
@@ -26,12 +31,49 @@ export async function getDevices(): Promise<DeviceWithRelations[]> {
     return apiFetchWithAuth<DeviceWithRelations[]>("/devices", {method : "GET"});
 }
 
+export async function getDeviceDashboardWidgets(
+    code: string
+): Promise<DeviceDashboardWidgetsResponse> {
+    return apiFetchWithAuth<DeviceDashboardWidgetsResponse>(
+        `/devices/${encodeURIComponent(code)}/widgets`,
+        { method: "GET" }
+    );
+}
+
+export async function updateDeviceDashboardWidgets(
+    code: string,
+    widgets: DeviceDashboardWidget[]
+): Promise<DeviceDashboardWidgetsResponse> {
+    return apiFetchWithAuth<DeviceDashboardWidgetsResponse>(
+        `/devices/${encodeURIComponent(code)}/widgets`,
+        {
+            method: "PUT",
+            body: JSON.stringify({ widgets }),
+        }
+    );
+}
+
+export async function runDeviceDashboardWidgetAction(
+    code: string,
+    widgetId: string,
+    input: DeviceDashboardWidgetActionInput = {}
+) {
+    return apiFetchWithAuth<{ ok: boolean; widgetId: string; state?: boolean }>(
+        `/devices/${encodeURIComponent(code)}/widgets/${encodeURIComponent(widgetId)}/action`,
+        {
+            method: "POST",
+            body: JSON.stringify(input),
+        }
+    );
+}
+
 export async function createDevice(payload: {
     code: string;
     device_type_id: string;
     owner_id?: number | null;
     owner_email?: string;
     activated?: boolean;
+    clone_from_code?: string;
 }) {
     return apiFetchWithAuth<DeviceProvisioningResult>("/devices", {
         method: "POST",

@@ -3,14 +3,17 @@ import {
     MQTT_ACL_PERMISSION,
     MqttAclAction,
 } from "@shared/constants/mqtt";
+import { mqttTopicMatches } from "@shared/types/mqtt";
 import {
     DeviceTypeMqttTopic,
+    getDashboardWidgetStateTopicKey,
     parseDeviceTypeMqttTopics,
 } from "@shared/types/device_type_mqtt";
 import { ROLES } from "@shared/constants/auth";
 import { DB } from "../config/database";
 import { resolveMqttTopicTemplate } from "./mqttTopicTemplate";
 import { MQTT_USER_ACL_SYNCED_EVENT, mqttAclEvents } from "../services/mqttAclEvents";
+import { loadDeviceWidgets } from "../repositories/deviceWidgetRepository";
 
 type UserAclDevice = {
     code: string;
@@ -28,25 +31,6 @@ type UserAclRule = {
     sourceDeviceCode: string;
     sourceKey: string;
 };
-
-export function mqttTopicMatches(pattern: string, topic: string): boolean {
-    const patternParts = pattern.split("/");
-    const topicParts = topic.split("/");
-
-    for (let i = 0, j = 0; i < patternParts.length; i += 1, j += 1) {
-        const patternPart = patternParts[i];
-        const topicPart = topicParts[j];
-
-        if (patternPart === "#") return i === patternParts.length - 1;
-        if (patternPart === "+") {
-            if (typeof topicPart === "undefined") return false;
-            continue;
-        }
-        if (typeof topicPart === "undefined" || patternPart !== topicPart) return false;
-    }
-
-    return patternParts.length === topicParts.length;
-}
 
 function getUserRole(userId: number): string {
     const row = DB.prepare("SELECT role FROM users WHERE id = ?").get(userId) as
@@ -202,6 +186,11 @@ function buildGeneratedUserAclRules(userId: number): UserAclRule[] {
 
     for (const device of devices) {
         const topics = parseDeviceTypeMqttTopics(device.mqttTopics);
+        const stateTopicKeys = new Set(
+            loadDeviceWidgets(device.code)
+                .map((widget) => getDashboardWidgetStateTopicKey(widget))
+                .filter((key): key is string => Boolean(key))
+        );
         for (const topic of topics) {
             const linkedTargetTopic = findLinkedTargetTopic(topic);
             const topicTemplate = topic.linkedTopic
@@ -220,6 +209,25 @@ function buildGeneratedUserAclRules(userId: number): UserAclRule[] {
                     rules,
                     seen
                 );
+
+                if (
+                    stateTopicKeys.has(topic.key) &&
+                    topic.action === MQTT_ACL_ACTIONS.SUBSCRIBE
+                ) {
+                    addUserRulesForTopic(
+                        userId,
+                        device,
+                        targetDevice,
+                        {
+                            ...topic,
+                            key: `widget_state:${topic.key}`,
+                            action: MQTT_ACL_ACTIONS.PUBLISH,
+                        },
+                        topicTemplate,
+                        rules,
+                        seen
+                    );
+                }
             }
         }
     }

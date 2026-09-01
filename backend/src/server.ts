@@ -11,6 +11,8 @@ import "./config/database"; // inizializza DB
 import { User } from "@shared/types/user";
 import { securityHeadersMiddleware } from "./middleware/securityHeaders";
 import { sensitiveIpRateLimitMiddleware } from "./middleware/rateLimit";
+import { syncGeneratedMqttAclRulesForAllDevices } from "./utils/deviceTypeMqtt";
+import { syncGeneratedMqttUserAclRulesForAllUsers } from "./utils/mqttUserAcl";
 
 declare global {
   namespace Express {
@@ -26,6 +28,8 @@ declare global {
 
 const app = express();
 app.set("trust proxy", 1);
+syncGeneratedMqttAclRulesForAllDevices();
+syncGeneratedMqttUserAclRulesForAllUsers();
 
 const ENABLE_REQUEST_LOGS = process.env.ENABLE_REQUEST_LOGS !== "false";
 const ALLOWED_CORS_ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "")

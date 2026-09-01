@@ -1,80 +1,38 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { DeviceWithRelations } from "@shared/types/device";
-import { PropertyType } from "@shared/types/properties";
 import {
-    DEVICE_TYPE_WIDGET_KINDS,
-    DeviceTypeDashboardWidget,
-    DeviceTypeMqttTopic,
-    parseDeviceTypeDashboardWidgets,
-    parseDeviceTypeMqttTopics,
+    DEVICE_WIDGET_KINDS,
+    DashboardWidgetValue,
+    DeviceDashboardWidgetRuntime,
+    readDashboardStateValue,
 } from "@shared/types/device_type_mqtt";
+import { mqttTopicMatches } from "@shared/types/mqtt";
 import { ROLES, Role } from "@shared/constants/auth";
 import { useAuth } from "../auth/AuthContext";
-import { getDevices, publishMqttWithSession } from "../devices/deviceService";
-import { DevicePropertyRow, buildPropertyRows } from "../devices/deviceProperties";
+import {
+    getDeviceDashboardWidgets,
+    getDevices,
+    runDeviceDashboardWidgetAction,
+} from "../devices/deviceService";
 import ErrorBanner from "../components/ErrorBanner";
 import { getApiUrl } from "../api/apiClient";
 import "../style/HomePage.css";
 
-const formatPropertyValue = (type: PropertyType, value: string): string => {
-    if (!value) return "-";
-    if (type === PropertyType.BOOL) {
-        return value === "true" ? "On" : "Off";
-    }
-    return value;
-};
-
-const getWidgetClassName = (type: PropertyType): string => {
-    if (type === PropertyType.BOOL) return "home-widget switch";
-    if (type === PropertyType.INT || type === PropertyType.UINT || type === PropertyType.FLOAT) return "home-widget value";
-    return "home-widget text";
-};
-
-const hasPropertyMqttWidget = (property: DevicePropertyRow): boolean => {
-    return Boolean(property.mqtt?.publishTopic || property.mqtt?.subscribeTopic);
-};
-
-const canSeePropertyKey = (role?: Role): boolean => {
+const canSeeRealtimeStatus = (role?: Role): boolean => {
     return role === ROLES.ADMIN || role === ROLES.DEV;
 };
 
-const renderPropertyName = (property: DevicePropertyRow, showKey: boolean) => {
-    if (!property.label) return property.key;
-    if (!showKey) return property.label;
-    return (
-        <>
-            {property.label}
-            <small>{property.key}</small>
-        </>
-    );
-};
-
-const getMqttWidgetClassName = (widget: DeviceTypeDashboardWidget): string => {
-    if (widget.kind === DEVICE_TYPE_WIDGET_KINDS.BUTTON) return "home-widget button";
-    if (widget.kind === DEVICE_TYPE_WIDGET_KINDS.SWITCH) return "home-widget switch";
-    if (widget.kind === DEVICE_TYPE_WIDGET_KINDS.VALUE) return "home-widget value";
-    if (widget.kind === DEVICE_TYPE_WIDGET_KINDS.INPUT) return "home-widget input";
+const getMqttWidgetClassName = (widget: DeviceDashboardWidgetRuntime): string => {
+    if (widget.kind === DEVICE_WIDGET_KINDS.BUTTON) return "home-widget button";
+    if (widget.kind === DEVICE_WIDGET_KINDS.SWITCH) return "home-widget switch";
+    if (widget.kind === DEVICE_WIDGET_KINDS.VALUE) return "home-widget value";
+    if (widget.kind === DEVICE_WIDGET_KINDS.INPUT) return "home-widget input";
     return "home-widget text";
 };
 
-const resolveTopicTemplate = (topic: string, device: DeviceWithRelations): string => {
-    return topic
-        .replace(/\{deviceCode\}/g, device.code)
-        .replace(/\{ownerId\}/g, String(device.owner_id || ""))
-        .replace(/\{deviceTypeId\}/g, device.device_type_id);
-};
-
 const getDisplayValue = (value: unknown): unknown => {
-    if (
-        value &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        Object.prototype.hasOwnProperty.call(value, "value")
-    ) {
-        return (value as { value: unknown }).value;
-    }
-    return value;
+    return readDashboardStateValue(value);
 };
 
 const formatMqttLiveValue = (value: unknown, fallback = "-"): string => {
@@ -91,6 +49,17 @@ const formatMqttLiveValue = (value: unknown, fallback = "-"): string => {
     return String(displayValue);
 };
 
+const dashboardValuesEqual = (
+    value: unknown,
+    configuredValue: DashboardWidgetValue
+): boolean => {
+    const displayValue = getDisplayValue(value);
+    if (typeof displayValue === typeof configuredValue) {
+        return displayValue === configuredValue;
+    }
+    return String(displayValue ?? "").trim() === String(configuredValue).trim();
+};
+
 const isLiveValueOn = (value: unknown): boolean => {
     const displayValue = getDisplayValue(value);
     if (typeof displayValue === "boolean") return displayValue;
@@ -98,16 +67,60 @@ const isLiveValueOn = (value: unknown): boolean => {
     return ["1", "true", "on", "yes"].includes(normalized);
 };
 
+const getConfiguredSwitchState = (
+    value: unknown,
+    onValue?: DashboardWidgetValue,
+    offValue?: DashboardWidgetValue
+): boolean | undefined => {
+    if (typeof value === "undefined") return undefined;
+    if (typeof onValue !== "undefined" && dashboardValuesEqual(value, onValue)) {
+        return true;
+    }
+    if (typeof offValue !== "undefined" && dashboardValuesEqual(value, offValue)) {
+        return false;
+    }
+    if (typeof onValue !== "undefined" || typeof offValue !== "undefined") {
+        return undefined;
+    }
+    return isLiveValueOn(value);
+};
+
+type MqttLiveEntry = {
+    value: unknown;
+    receivedAt: string;
+};
+
+const getMqttLiveValue = (
+    values: Record<string, MqttLiveEntry>,
+    topicPattern: string
+): unknown => {
+    const exact = values[topicPattern];
+    if (exact) return exact.value;
+
+    let latest: MqttLiveEntry | undefined;
+    for (const [topic, entry] of Object.entries(values)) {
+        if (!mqttTopicMatches(topicPattern, topic)) continue;
+        if (!latest || entry.receivedAt > latest.receivedAt) {
+            latest = entry;
+        }
+    }
+    return latest?.value;
+};
+
 const HomePage = () => {
     const { user, loading: authLoading } = useAuth();
-    const showPropertyKey = canSeePropertyKey(user?.role);
+    const showRealtimeStatus = canSeeRealtimeStatus(user?.role);
     const [devices, setDevices] = useState<DeviceWithRelations[]>([]);
     const [selectedDeviceCode, setSelectedDeviceCode] = useState("");
     const [loading, setLoading] = useState(false);
     const [publishingWidgetId, setPublishingWidgetId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [mqttLiveValues, setMqttLiveValues] = useState<Record<string, unknown>>({});
+    const [mqttLiveValues, setMqttLiveValues] = useState<Record<string, MqttLiveEntry>>({});
     const [mqttStreamConnected, setMqttStreamConnected] = useState(false);
+    const [mqttStreamTopicCount, setMqttStreamTopicCount] = useState<number | null>(null);
+    const [dashboardWidgets, setDashboardWidgets] = useState<DeviceDashboardWidgetRuntime[]>([]);
+    const [switchWidgetStates, setSwitchWidgetStates] = useState<Record<string, boolean>>({});
+    const [widgetInputValues, setWidgetInputValues] = useState<Record<string, string>>({});
 
     const fetchDevices = async () => {
         if (!user) return;
@@ -131,6 +144,7 @@ const HomePage = () => {
         if (!user) {
             setMqttLiveValues({});
             setMqttStreamConnected(false);
+            setMqttStreamTopicCount(null);
             return;
         }
 
@@ -138,8 +152,16 @@ const HomePage = () => {
             withCredentials: true,
         });
 
-        const handleReady = () => {
+        const handleReady = (event: Event) => {
             setMqttStreamConnected(true);
+            try {
+                const payload = JSON.parse((event as MessageEvent).data) as { topics?: number };
+                setMqttStreamTopicCount(
+                    typeof payload.topics === "number" ? payload.topics : null
+                );
+            } catch {
+                setMqttStreamTopicCount(null);
+            }
         };
 
         const handleMessage = (event: Event) => {
@@ -148,13 +170,17 @@ const HomePage = () => {
                     topic?: string;
                     content?: unknown;
                     payload?: unknown;
+                    receivedAt?: string;
                 };
                 if (!message.topic) return;
                 setMqttLiveValues((current) => ({
                     ...current,
-                    [message.topic as string]: typeof message.content === "undefined"
-                        ? message.payload
-                        : message.content,
+                    [message.topic as string]: {
+                        value: typeof message.content === "undefined"
+                            ? message.payload
+                            : message.content,
+                        receivedAt: message.receivedAt || new Date().toISOString(),
+                    },
                 }));
             } catch {
                 // Ignore malformed stream events; the connection remains usable.
@@ -197,59 +223,82 @@ const HomePage = () => {
         }
     }, [devices, selectedDeviceCode]);
 
-    const metrics = useMemo(() => {
-        const total = devices.length;
-        const active = devices.filter((device) => Boolean(device.activated)).length;
-        const shared = devices.filter((device) => Boolean(device.is_shared)).length;
-        return { total, active, shared };
-    }, [devices]);
-
     const selectedDevice = useMemo(
         () => devices.find((device) => device.code === selectedDeviceCode) || null,
         [devices, selectedDeviceCode]
     );
 
-    const selectedProperties = useMemo(
-        () => (selectedDevice ? buildPropertyRows(selectedDevice) : []),
-        [selectedDevice]
-    );
+    useEffect(() => {
+        if (!selectedDevice) {
+            setDashboardWidgets([]);
+            setSwitchWidgetStates({});
+            setWidgetInputValues({});
+            return;
+        }
+        let cancelled = false;
+        setDashboardWidgets([]);
+        setSwitchWidgetStates({});
+        setWidgetInputValues({});
+        void getDeviceDashboardWidgets(selectedDevice.code)
+            .then((result) => {
+                if (!cancelled) setDashboardWidgets(result.widgets);
+            })
+            .catch((err: any) => {
+                if (!cancelled) setError(err?.error || "Error loading device widgets.");
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedDevice?.code]);
 
-    const selectedMqttTopics = useMemo(
-        () => (selectedDevice ? parseDeviceTypeMqttTopics(selectedDevice.type_mqttTopics) : []),
-        [selectedDevice]
-    );
+    useEffect(() => {
+        setSwitchWidgetStates((current) => {
+            let next = current;
+            for (const widget of dashboardWidgets) {
+                if (widget.kind !== DEVICE_WIDGET_KINDS.SWITCH || !widget.stateTopic) {
+                    continue;
+                }
+                const mqttValue = getMqttLiveValue(mqttLiveValues, widget.stateTopic);
+                const liveValue = typeof mqttValue !== "undefined"
+                    ? readDashboardStateValue(mqttValue, widget.stateValuePath)
+                    : undefined;
+                const receivedState = getConfiguredSwitchState(
+                    liveValue,
+                    widget.onValue,
+                    widget.offValue
+                );
+                if (
+                    typeof receivedState === "undefined" ||
+                    current[widget.id] === receivedState
+                ) {
+                    continue;
+                }
+                if (next === current) next = { ...current };
+                next[widget.id] = receivedState;
+            }
+            return next;
+        });
+    }, [dashboardWidgets, mqttLiveValues]);
 
-    const selectedDashboardWidgets = useMemo(
-        () => (selectedDevice ? parseDeviceTypeDashboardWidgets(selectedDevice.type_dashboardWidgets) : []),
-        [selectedDevice]
-    );
-
-    const selectedMqttProperties = useMemo(
-        () => selectedProperties.filter(hasPropertyMqttWidget),
-        [selectedProperties]
-    );
-
-    const handlePublishWidget = async (
-        widget: DeviceTypeDashboardWidget,
-        topic: DeviceTypeMqttTopic | undefined
+    const handleWidgetAction = async (
+        widget: DeviceDashboardWidgetRuntime,
+        input: { state?: boolean; value?: DashboardWidgetValue } = {}
     ) => {
-        if (!selectedDevice || !topic) {
-            setError("Missing MQTT topic for this widget.");
-            return;
-        }
-
-        if (typeof widget.publishValue === "undefined" && !widget.payload) {
-            setError(`Missing publish value for widget "${widget.label}".`);
-            return;
-        }
-
+        if (!selectedDevice) return;
         try {
             setPublishingWidgetId(widget.id);
             setError(null);
-            await publishMqttWithSession({
-                topic: resolveTopicTemplate(topic.topic, selectedDevice),
-                content: widget.payload || { value: widget.publishValue },
-            });
+            const result = await runDeviceDashboardWidgetAction(
+                selectedDevice.code,
+                widget.id,
+                input
+            );
+            if (typeof result.state === "boolean") {
+                setSwitchWidgetStates((current) => ({
+                    ...current,
+                    [widget.id]: result.state,
+                }));
+            }
         } catch (err: any) {
             setError(err?.error || "Error while publishing MQTT message.");
         } finally {
@@ -291,7 +340,7 @@ const HomePage = () => {
                     <button className="home-secondary-button" type="button" onClick={fetchDevices} disabled={loading}>
                         {loading ? "Refreshing..." : "Refresh"}
                     </button>
-                    <Link className="home-primary-link" to="/devices">
+                    <Link className="app-action-button" to="/devices">
                         Add device
                     </Link>
                 </div>
@@ -310,21 +359,6 @@ const HomePage = () => {
             ) : (
                 <section className="home-dashboard-shell">
                     <aside className="home-device-rail" aria-label="Devices">
-                        <div className="home-metrics compact" aria-label="Device summary">
-                            <article className="home-metric">
-                                <span>Total</span>
-                                <strong>{metrics.total}</strong>
-                            </article>
-                            <article className="home-metric">
-                                <span>Active</span>
-                                <strong>{metrics.active}</strong>
-                            </article>
-                            <article className="home-metric">
-                                <span>Shared</span>
-                                <strong>{metrics.shared}</strong>
-                            </article>
-                        </div>
-
                         <div className="home-device-list">
                             {devices.map((device) => (
                                 <button
@@ -366,56 +400,106 @@ const HomePage = () => {
                                 </div>
                             </section>
 
-                            {selectedDashboardWidgets.length > 0 ? (
+                            {dashboardWidgets.length > 0 ? (
                                 <section className="home-widget-grid" aria-label="MQTT dashboard widgets">
-                                    {selectedDashboardWidgets.map((widget) => {
-                                        const topic = selectedMqttTopics.find((row) => row.key === widget.topicKey);
-                                        const resolvedTopic = topic && selectedDevice
-                                            ? resolveTopicTemplate(topic.topic, selectedDevice)
-                                            : "";
-                                        const liveValue = resolvedTopic ? mqttLiveValues[resolvedTopic] : undefined;
+                                    {dashboardWidgets.map((widget) => {
+                                        const mqttValue = widget.stateTopic
+                                            ? getMqttLiveValue(mqttLiveValues, widget.stateTopic)
+                                            : undefined;
+                                        const hasMqttValue = typeof mqttValue !== "undefined";
+                                        const liveValue = typeof mqttValue !== "undefined"
+                                            ? readDashboardStateValue(mqttValue, widget.stateValuePath)
+                                            : undefined;
                                         const hasLiveValue = typeof liveValue !== "undefined";
+                                        const isPublishing = publishingWidgetId === widget.id;
+                                        const receivedSwitchState = getConfiguredSwitchState(
+                                            liveValue,
+                                            widget.onValue,
+                                            widget.offValue
+                                        );
+                                        const switchIsOn = receivedSwitchState
+                                            ?? switchWidgetStates[widget.id]
+                                            ?? false;
                                         return (
                                             <article className={getMqttWidgetClassName(widget)} key={widget.id}>
                                                 <div className="home-widget-head">
                                                     <span>{widget.label}</span>
-                                                    <small>{mqttStreamConnected ? "live" : widget.kind}</small>
+                                                    <small>
+                                                        {showRealtimeStatus
+                                                            ? hasLiveValue
+                                                                ? "live"
+                                                                : hasMqttValue
+                                                                    ? "invalid state"
+                                                                    : widget.stateTopic
+                                                                        ? mqttStreamTopicCount === 0
+                                                                            ? "no topics"
+                                                                            : mqttStreamConnected
+                                                                                ? "waiting"
+                                                                                : "offline"
+                                                                        : widget.kind
+                                                            : widget.kind}
+                                                    </small>
                                                 </div>
 
-                                                {widget.kind === DEVICE_TYPE_WIDGET_KINDS.BUTTON ? (
+                                                {widget.kind === DEVICE_WIDGET_KINDS.BUTTON ? (
                                                     <button
                                                         type="button"
                                                         className="home-action-button"
-                                                        disabled={
-                                                            publishingWidgetId === widget.id ||
-                                                            !topic
-                                                        }
-                                                        onClick={() => handlePublishWidget(widget, topic)}
+                                                        disabled={isPublishing || !widget.configured}
+                                                        onClick={() => handleWidgetAction(widget)}
                                                     >
-                                                        {publishingWidgetId === widget.id
+                                                        {isPublishing
                                                             ? "Sending..."
-                                                            : `Send ${typeof widget.publishValue === "undefined"
-                                                                ? "payload"
-                                                                : String(widget.publishValue)
-                                                            }`}
+                                                            : widget.configured ? "Send" : "Not configured"}
                                                     </button>
-                                                ) : widget.kind === DEVICE_TYPE_WIDGET_KINDS.SWITCH ? (
+                                                ) : widget.kind === DEVICE_WIDGET_KINDS.SWITCH ? (
                                                     <div className="home-switch-widget">
-                                                        <span className={isLiveValueOn(liveValue) ? "home-switch on" : "home-switch"}>
+                                                        <button
+                                                            type="button"
+                                                            className={switchIsOn ? "home-switch on" : "home-switch"}
+                                                            aria-pressed={switchIsOn}
+                                                            aria-label={`${widget.label}: ${switchIsOn ? "on" : "off"}`}
+                                                            disabled={isPublishing || !widget.configured}
+                                                            onClick={() => handleWidgetAction(widget, {
+                                                                state: !switchIsOn,
+                                                            })}
+                                                        >
                                                             <span />
-                                                        </span>
-                                                        <strong>
-                                                            {hasLiveValue
-                                                                ? formatMqttLiveValue(liveValue)
-                                                                : topic?.key || "-"}
-                                                        </strong>
+                                                        </button>
                                                     </div>
-                                                ) : widget.kind === DEVICE_TYPE_WIDGET_KINDS.VALUE ? (
+                                                ) : widget.kind === DEVICE_WIDGET_KINDS.INPUT ? (
+                                                    <div className="home-input-widget">
+                                                        <input
+                                                            type="text"
+                                                            value={widgetInputValues[widget.id] || ""}
+                                                            disabled={isPublishing || !widget.configured}
+                                                            onChange={(event) => setWidgetInputValues((current) => ({
+                                                                ...current,
+                                                                [widget.id]: event.target.value,
+                                                            }))}
+                                                            aria-label={widget.label}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            className="home-action-button"
+                                                            disabled={
+                                                                isPublishing ||
+                                                                !widget.configured ||
+                                                                !widgetInputValues[widget.id]?.trim()
+                                                            }
+                                                            onClick={() => handleWidgetAction(widget, {
+                                                                value: widgetInputValues[widget.id],
+                                                            })}
+                                                        >
+                                                            {isPublishing ? "Sending..." : "Send"}
+                                                        </button>
+                                                    </div>
+                                                ) : widget.kind === DEVICE_WIDGET_KINDS.VALUE ? (
                                                     <div className="home-value-widget">
                                                         <strong>
                                                             {hasLiveValue
                                                                 ? formatMqttLiveValue(liveValue)
-                                                                : topic?.key || "-"}
+                                                                : widget.configured ? "-" : "Not configured"}
                                                         </strong>
                                                     </div>
                                                 ) : (
@@ -423,105 +507,18 @@ const HomePage = () => {
                                                         <strong>
                                                             {hasLiveValue
                                                                 ? formatMqttLiveValue(liveValue)
-                                                                : resolvedTopic || "No topic"}
+                                                                : widget.configured ? "-" : "Not configured"}
                                                         </strong>
                                                     </div>
                                                 )}
                                             </article>
                                         );
                                     })}
-                                </section>
-                            ) : selectedMqttProperties.length > 0 ? (
-                                <section className="home-widget-grid" aria-label="Property MQTT widgets">
-                                    {selectedMqttProperties.map((property) => {
-                                        const liveTopic = property.mqtt?.publishTopic && selectedDevice
-                                            ? resolveTopicTemplate(property.mqtt.publishTopic, selectedDevice)
-                                            : "";
-                                        const liveValue = liveTopic ? mqttLiveValues[liveTopic] : undefined;
-                                        const hasLiveValue = typeof liveValue !== "undefined";
-                                        const boolValue = hasLiveValue
-                                            ? isLiveValueOn(liveValue)
-                                            : property.value === "true";
-                                        return (
-                                            <article className={getWidgetClassName(property.type)} key={property.key}>
-                                                <div className="home-widget-head">
-                                                    <span>{renderPropertyName(property, showPropertyKey)}</span>
-                                                    <small>{hasLiveValue ? "live" : property.type}</small>
-                                                </div>
-
-                                                {property.type === PropertyType.BOOL ? (
-                                                    <div className="home-switch-widget">
-                                                        <span className={boolValue ? "home-switch on" : "home-switch"}>
-                                                            <span />
-                                                        </span>
-                                                        <strong>
-                                                            {hasLiveValue
-                                                                ? formatMqttLiveValue(liveValue)
-                                                                : formatPropertyValue(property.type, property.value)}
-                                                        </strong>
-                                                    </div>
-                                                ) : property.type === PropertyType.INT ||
-                                                    property.type === PropertyType.UINT ||
-                                                    property.type === PropertyType.FLOAT ? (
-                                                    <div className="home-value-widget">
-                                                        <strong>
-                                                            {hasLiveValue
-                                                                ? formatMqttLiveValue(liveValue)
-                                                                : formatPropertyValue(property.type, property.value)}
-                                                        </strong>
-                                                    </div>
-                                                ) : (
-                                                    <div className="home-text-widget">
-                                                        <strong>
-                                                            {hasLiveValue
-                                                                ? formatMqttLiveValue(liveValue)
-                                                                : property.mqtt?.publishTopic ||
-                                                                    property.mqtt?.subscribeTopic ||
-                                                                    formatPropertyValue(property.type, property.value)}
-                                                        </strong>
-                                                    </div>
-                                                )}
-                                            </article>
-                                        );
-                                    })}
-                                </section>
-                            ) : selectedProperties.length === 0 ? (
-                                <section className="home-empty inline">
-                                    <h2>No visible widgets</h2>
-                                    <p>Configure MQTT widgets or enable at least one visible property on this device type.</p>
                                 </section>
                             ) : (
-                                <section className="home-widget-grid" aria-label="Device widgets">
-                                    {selectedProperties.map((property) => {
-                                        const boolValue = property.value === "true";
-                                        return (
-                                            <article className={getWidgetClassName(property.type)} key={property.key}>
-                                                <div className="home-widget-head">
-                                                    <span>{renderPropertyName(property, showPropertyKey)}</span>
-                                                    <small>{property.type}</small>
-                                                </div>
-
-                                                {property.type === PropertyType.BOOL ? (
-                                                    <div className="home-switch-widget">
-                                                        <span className={boolValue ? "home-switch on" : "home-switch"}>
-                                                            <span />
-                                                        </span>
-                                                        <strong>{formatPropertyValue(property.type, property.value)}</strong>
-                                                    </div>
-                                                ) : property.type === PropertyType.INT ||
-                                                    property.type === PropertyType.UINT ||
-                                                    property.type === PropertyType.FLOAT ? (
-                                                    <div className="home-value-widget">
-                                                        <strong>{formatPropertyValue(property.type, property.value)}</strong>
-                                                    </div>
-                                                ) : (
-                                                    <div className="home-text-widget">
-                                                        <strong>{formatPropertyValue(property.type, property.value)}</strong>
-                                                    </div>
-                                                )}
-                                            </article>
-                                        );
-                                    })}
+                                <section className="home-empty inline">
+                                    <h2>No widgets configured</h2>
+                                    <p>This device type has no dashboard widgets.</p>
                                 </section>
                             )}
 
@@ -535,7 +532,7 @@ const HomePage = () => {
                 </section>
             )}
 
-            <ErrorBanner message={error} />
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
         </div>
     );
 };

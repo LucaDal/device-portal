@@ -8,12 +8,7 @@ import {
     parseDevicePropertyMap,
     parseSavedPropertyMap,
 } from "@shared/types/properties";
-import {
-    DeviceTypeDashboardWidget,
-    DeviceTypeMqttTopic,
-    parseDeviceTypeDashboardWidgets,
-    parseDeviceTypeMqttTopics,
-} from "@shared/types/device_type_mqtt";
+import { DeviceTypeMqttTopic, parseDeviceTypeMqttTopics } from "@shared/types/device_type_mqtt";
 
 export type GenericPropertyRow = PropertyRow & { value: string };
 export type DeviceTypePropertyEditorRow = GenericPropertyRow & { isGlobal: boolean };
@@ -21,7 +16,6 @@ export type DeviceTypePropertyEditorRow = GenericPropertyRow & { isGlobal: boole
 export type DeviceTypePropertiesFormState = {
     properties: DeviceTypePropertyEditorRow[];
     mqttTopics: DeviceTypeMqttTopic[];
-    dashboardWidgets: DeviceTypeDashboardWidget[];
 };
 
 type BuildPropertiesPayloadResult =
@@ -40,6 +34,7 @@ export const parseDeviceProperties = (raw: unknown): PropertyRow[] => {
         type: def.type,
         sensitive: Boolean(def.sensitive),
         visible: def.visible !== false,
+        notNull: def.notNull !== false,
         defaultValue: def.defaultValue,
         mqtt: def.mqtt,
     }));
@@ -60,12 +55,8 @@ export const parseMqttTopics = (raw: unknown): DeviceTypeMqttTopic[] => {
     return parseDeviceTypeMqttTopics(raw);
 };
 
-export const parseDashboardWidgets = (raw: unknown): DeviceTypeDashboardWidget[] => {
-    return parseDeviceTypeDashboardWidgets(raw);
-};
-
 export const parseDeviceTypePropertiesForm = (
-    device: Pick<DeviceType, "deviceProperties" | "genericProperties" | "mqttTopics" | "dashboardWidgets">
+    device: Pick<DeviceType, "deviceProperties" | "genericProperties" | "mqttTopics">
 ): DeviceTypePropertiesFormState => ({
     properties: [
         ...parseDeviceProperties(device.deviceProperties).map((row) => ({
@@ -77,11 +68,11 @@ export const parseDeviceTypePropertiesForm = (
             ...row,
             sensitive: false,
             visible: true,
+            notNull: true,
             isGlobal: true,
         })),
     ],
     mqttTopics: parseMqttTopics(device.mqttTopics),
-    dashboardWidgets: parseDashboardWidgets(device.dashboardWidgets),
 });
 
 const castGenericValue = (
@@ -124,8 +115,11 @@ export const buildDeviceTypePropertiesPayload = (
             ...(row.label?.trim() ? { label: row.label.trim() } : {}),
             sensitive: row.type === PropertyType.STRING && Boolean(row.sensitive),
             visible: row.visible !== false,
+            notNull: row.type === PropertyType.BOOL || row.notNull !== false,
         };
-        if (row.value.trim() !== "") {
+        if (row.type === PropertyType.BOOL) {
+            nextDefinition.defaultValue = row.value === "true";
+        } else if (row.value.trim() !== "") {
             const cast = castPropertyValue(row.type, row.value, key);
             if (!cast.ok) return cast;
             nextDefinition.defaultValue = cast.value;

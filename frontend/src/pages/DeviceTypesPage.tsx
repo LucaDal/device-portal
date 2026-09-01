@@ -1,19 +1,13 @@
 import { useEffect, useMemo, useRef, useState, FormEvent, ChangeEvent } from "react";
 import { DeviceType } from "@shared/types/device_type";
 import { PropertyType, parseSavedPropertyMap } from "@shared/types/properties";
-import {
-    DEVICE_TYPE_WIDGET_KINDS,
-    DeviceTypeDashboardWidget,
-    DeviceTypeMqttTopic,
-    DeviceTypeWidgetKind,
-} from "@shared/types/device_type_mqtt";
+import { DeviceTypeMqttTopic } from "@shared/types/device_type_mqtt";
 import { MQTT_ACL_ACTIONS, MqttAclAction } from "@shared/constants/mqtt";
 import { getDeviceTypes, updateDeviceType } from "../devices/deviceService";
 import { getDefaultProperties } from "../admin/adminService";
 import {
     DeviceTypePropertyEditorRow,
     buildDeviceTypePropertiesPayload,
-    parseDashboardWidgets,
     parseDeviceTypePropertiesForm,
     parseMqttTopics,
 } from "../deviceTypes/deviceTypeProperties";
@@ -43,7 +37,6 @@ const DeviceTypesPage: React.FC = () => {
 
     const [propertyRows, setPropertyRows] = useState<DeviceTypePropertyEditorRow[]>([]);
     const [mqttTopics, setMqttTopics] = useState<DeviceTypeMqttTopic[]>([]);
-    const [dashboardWidgets, setDashboardWidgets] = useState<DeviceTypeDashboardWidget[]>([]);
     const [propertiesLoadedTypeId, setPropertiesLoadedTypeId] = useState("");
 
     const [submitting, setSubmitting] = useState(false);
@@ -126,7 +119,6 @@ const DeviceTypesPage: React.FC = () => {
         const formState = parseDeviceTypePropertiesForm(device);
         setPropertyRows(formState.properties);
         setMqttTopics(formState.mqttTopics);
-        setDashboardWidgets(formState.dashboardWidgets);
         setPropertiesLoadedTypeId(device.id);
     };
 
@@ -270,6 +262,7 @@ const DeviceTypesPage: React.FC = () => {
                 type: PropertyType.STRING,
                 sensitive: false,
                 visible: true,
+                notNull: true,
                 value: "",
                 isGlobal,
             },
@@ -283,6 +276,16 @@ const DeviceTypesPage: React.FC = () => {
                     ? {
                         ...p,
                         ...patch,
+                        value:
+                            patch.type === PropertyType.BOOL && p.type !== PropertyType.BOOL
+                                ? "false"
+                                : patch.type && p.type === PropertyType.BOOL
+                                    ? ""
+                                    : patch.value ?? p.value,
+                        notNull:
+                            (patch.type || p.type) === PropertyType.BOOL
+                                ? true
+                                : patch.notNull ?? p.notNull,
                         sensitive:
                             (patch.type || p.type) === PropertyType.STRING && !(patch.isGlobal ?? p.isGlobal)
                                 ? Boolean(patch.sensitive ?? p.sensitive)
@@ -338,6 +341,7 @@ const DeviceTypesPage: React.FC = () => {
                     ...row,
                     isGlobal: Boolean(row.global),
                     visible: true,
+                    notNull: true,
                     sensitive: false,
                 }));
             return [...prev, ...nextDefaults];
@@ -409,26 +413,6 @@ const DeviceTypesPage: React.FC = () => {
         );
     };
 
-    const handleAddDashboardWidget = () => {
-        setDashboardWidgets((prev) => [
-            ...prev,
-            {
-                id: "",
-                label: "",
-                kind: DEVICE_TYPE_WIDGET_KINDS.VALUE,
-                topicKey: mqttTopics[0]?.key || "",
-            },
-        ]);
-    };
-
-    const handleDashboardWidgetChange = (index: number, patch: Partial<DeviceTypeDashboardWidget>) => {
-        setDashboardWidgets((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
-    };
-
-    const handleRemoveDashboardWidget = (index: number) => {
-        setDashboardWidgets((prev) => prev.filter((_, i) => i !== index));
-    };
-
     const handlePropertiesSubmit = async (e: FormEvent) => {
         e.preventDefault();
         setError(null);
@@ -461,9 +445,6 @@ const DeviceTypesPage: React.FC = () => {
             const mqttTopicsForSubmit = propertiesAreLoaded
                 ? mqttTopics
                 : parseMqttTopics(selectedDevice.mqttTopics);
-            const dashboardWidgetsForSubmit = propertiesAreLoaded
-                ? dashboardWidgets
-                : parseDashboardWidgets(selectedDevice.dashboardWidgets);
             const payload = buildDeviceTypePropertiesPayload(propertiesForSubmit);
 
             if (!payload.ok) {
@@ -479,7 +460,6 @@ const DeviceTypesPage: React.FC = () => {
             formData.append("deviceProperties", JSON.stringify(payload.deviceProperties));
             formData.append("genericProperties", JSON.stringify(payload.genericProperties));
             formData.append("mqttTopics", JSON.stringify(mqttTopicsForSubmit));
-            formData.append("dashboardWidgets", JSON.stringify(dashboardWidgetsForSubmit));
 
             const response = await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
             const updated = await response.json().catch(() => null) as DeviceType | null;
@@ -771,6 +751,7 @@ const DeviceTypesPage: React.FC = () => {
                                             <strong>Label</strong>
                                             <strong>Type</strong>
                                             <strong>Default value</strong>
+                                            <strong>Not null</strong>
                                             <strong>Show</strong>
                                             <strong>Encrypt</strong>
                                             <strong>Action</strong>
@@ -844,6 +825,21 @@ const DeviceTypesPage: React.FC = () => {
                                                         handlePropertyChange(index, { value: e.target.value })
                                                     }
                                                 />
+                                            )}
+
+                                            {!p.isGlobal && p.type !== PropertyType.BOOL ? (
+                                                <label className="dt-small dt-prop-inline-flag">
+                                                    <input
+                                                        className="dt-check"
+                                                        type="checkbox"
+                                                        checked={p.notNull !== false}
+                                                        onChange={(e) =>
+                                                            handlePropertyChange(index, { notNull: e.target.checked })
+                                                        }
+                                                    />
+                                                </label>
+                                            ) : (
+                                                <span className="dt-small dt-prop-inline-empty">-</span>
                                             )}
 
                                             {!p.isGlobal ? (
@@ -1017,111 +1013,6 @@ const DeviceTypesPage: React.FC = () => {
                                     </button>
                                 </div>
 
-                                <div className="dt-divider" />
-
-                                <div className="dt-form-group">
-                                    <div className="dt-section-heading">
-                                        <h3>Dashboard widgets</h3>
-                                        <p>Admin catalog</p>
-                                    </div>
-
-                                    {dashboardWidgets.length === 0 && (
-                                        <p className="dt-empty">No widgets. Add one.</p>
-                                    )}
-
-                                    {dashboardWidgets.length > 0 && (
-                                        <div className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-widget dt-prop-row-header">
-                                            <strong>ID</strong>
-                                            <strong>Label</strong>
-                                            <strong>Kind</strong>
-                                            <strong>Topic</strong>
-                                            <strong>Publish value</strong>
-                                            <strong>Action</strong>
-                                        </div>
-                                    )}
-
-                                    {dashboardWidgets.map((widget, index) => (
-                                        <div
-                                            key={`dashboard-widget-${index}`}
-                                            className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-widget"
-                                        >
-                                            <input
-                                                type="text"
-                                                placeholder="relayButton"
-                                                value={widget.id}
-                                                onChange={(e) =>
-                                                    handleDashboardWidgetChange(index, { id: e.target.value })
-                                                }
-                                            />
-                                            <input
-                                                type="text"
-                                                placeholder="Relay ON"
-                                                value={widget.label}
-                                                onChange={(e) =>
-                                                    handleDashboardWidgetChange(index, { label: e.target.value })
-                                                }
-                                            />
-                                            <select
-                                                value={widget.kind}
-                                                onChange={(e) =>
-                                                    handleDashboardWidgetChange(index, {
-                                                        kind: e.target.value as DeviceTypeWidgetKind,
-                                                    })
-                                                }
-                                            >
-                                                <option value={DEVICE_TYPE_WIDGET_KINDS.TEXT}>text</option>
-                                                <option value={DEVICE_TYPE_WIDGET_KINDS.VALUE}>value</option>
-                                                <option value={DEVICE_TYPE_WIDGET_KINDS.SWITCH}>switch</option>
-                                                <option value={DEVICE_TYPE_WIDGET_KINDS.INPUT}>input</option>
-                                                <option value={DEVICE_TYPE_WIDGET_KINDS.BUTTON}>button</option>
-                                            </select>
-                                            <select
-                                                value={widget.topicKey}
-                                                onChange={(e) =>
-                                                    handleDashboardWidgetChange(index, { topicKey: e.target.value })
-                                                }
-                                            >
-                                                <option value="">Select topic...</option>
-                                                {mqttTopics.map((topic) => (
-                                                    <option key={topic.key} value={topic.key}>
-                                                        {topic.key}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            <input
-                                                type="text"
-                                                placeholder="1 / true / on"
-                                                value={
-                                                    typeof widget.publishValue === "undefined"
-                                                        ? ""
-                                                        : String(widget.publishValue)
-                                                }
-                                                onChange={(e) =>
-                                                    handleDashboardWidgetChange(index, {
-                                                        publishValue: e.target.value,
-                                                    })
-                                                }
-                                                disabled={widget.kind !== DEVICE_TYPE_WIDGET_KINDS.BUTTON}
-                                            />
-                                            <button
-                                                type="button"
-                                                className="dt-btn dt-btn-xs dt-btn-danger"
-                                                onClick={() => handleRemoveDashboardWidget(index)}
-                                            >
-                                                ✕
-                                            </button>
-                                        </div>
-                                    ))}
-
-                                    <button
-                                        type="button"
-                                        className="dt-btn dt-btn-xs dt-btn-outline"
-                                        onClick={handleAddDashboardWidget}
-                                    >
-                                        + Add widget
-                                    </button>
-                                </div>
-
                                 <button
                                     type="submit"
                                     className="dt-btn dt-btn-primary"
@@ -1224,8 +1115,12 @@ const DeviceTypesPage: React.FC = () => {
                 </div>
             )}
 
-            <ErrorBanner message={error} />
-            {successMessage && <div className="dt-alert dt-alert-success">{successMessage}</div>}
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
+            <ErrorBanner
+                message={successMessage}
+                variant="success"
+                onDismiss={() => setSuccessMessage(null)}
+            />
         </div>
     );
 };

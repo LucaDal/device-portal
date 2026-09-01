@@ -225,6 +225,7 @@ const SettingsPage: React.FC = () => {
                         message={passwordBanner?.message}
                         variant={passwordBanner?.variant}
                         title={passwordBanner?.variant === "success" ? "Password saved" : "Password update"}
+                        onDismiss={() => setPasswordBanner(null)}
                     />
                     <form className="dt-form" onSubmit={handlePasswordSubmit}>
                         <div className="settings-form-grid">
@@ -286,6 +287,7 @@ const SettingsPage: React.FC = () => {
                         message={mqttBanner?.message}
                         variant={mqttBanner?.variant}
                         title={mqttBanner?.variant === "success" ? "MQTT settings saved" : "MQTT settings"}
+                        onDismiss={() => setMqttBanner(null)}
                     />
 
                     {mqttLoading ? (

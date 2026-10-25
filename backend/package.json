@@ -22,6 +22,7 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
+    "test:device-properties": "node --test test/deviceProperties.test.cjs",
     "dev": "pm2 start ecosystem.config.cjs --only device-portal-dev",
     "start": "pm2 start ecosystem.config.cjs --only device-portal-prod",
     "restart": "pm2 restart device-portal-prod",

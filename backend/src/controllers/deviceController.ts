@@ -153,7 +153,7 @@ export const DeviceController = {
                 dt.genericProperties AS type_genericProperties,
                 dt.mqttTopics AS type_mqttTopics,
                 CASE
-                    WHEN d.owner_id = ? THEN dp.properties
+                    WHEN ? = 1 OR d.owner_id = ? THEN COALESCE(dp.properties, '{}')
                     ELSE NULL
                 END AS device_properties
             FROM devices d
@@ -165,7 +165,7 @@ export const DeviceController = {
                AND ds.user_id = ?
         `;
 
-        const params: any[] = [userId, userId];
+        const params: any[] = [role === ROLES.ADMIN ? 1 : 0, userId, userId];
 
         if (role !== ROLES.ADMIN) {
             sql += ` WHERE d.owner_id = ? OR ds.user_id IS NOT NULL`;

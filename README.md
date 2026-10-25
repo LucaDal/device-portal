@@ -388,6 +388,12 @@ A `deviceProperties` definition supports `notNull`:
 
 This flag lives in the existing JSON column, so no property-table migration is required.
 
+`GET /devices` includes saved `device_properties` for the device owner and admin users.
+Other users with shared access receive `null` for this field. For an authorized reader, a device
+without saved properties returns the JSON string `"{}"`. Property visibility filters still apply,
+and sensitive values are decrypted only for authorized readers. Updating properties through
+`PUT /devices/:code/properties` remains restricted to the device owner.
+
 ### Device cloning
 
 Administrators can optionally select an existing device while creating a new one. `POST /devices`

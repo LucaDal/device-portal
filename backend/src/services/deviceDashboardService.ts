@@ -22,6 +22,7 @@ import {
 } from "../utils/deviceTypeMqtt";
 import { loadDeviceWidgets, replaceDeviceWidgets } from "../repositories/deviceWidgetRepository";
 import { syncGeneratedMqttUserAclRulesForAllUsers } from "../utils/mqttUserAcl";
+import { ACTIVE_MQTT_DEVICE_SQL } from "./deviceMqttPolicy";
 
 type AuthUser = { id?: number | string; role?: string };
 
@@ -30,6 +31,7 @@ type DeviceDashboardRow = {
     device_type_id: string;
     owner_id: number | null;
     mqttTopics?: string | null;
+    mqtt_available: number;
 };
 
 export class DeviceDashboardError extends Error {
@@ -40,7 +42,8 @@ export class DeviceDashboardError extends Error {
 
 function loadDeviceDashboardRow(deviceCode: string): DeviceDashboardRow | undefined {
     return DB.prepare(`
-        SELECT d.code, d.device_type_id, d.owner_id, dt.mqttTopics
+        SELECT d.code, d.device_type_id, d.owner_id, dt.mqttTopics,
+            (${ACTIVE_MQTT_DEVICE_SQL}) AS mqtt_available
         FROM devices d
         JOIN device_types dt ON dt.id = d.device_type_id
         WHERE d.code = ?
@@ -61,9 +64,10 @@ function canAccessDevice(deviceCode: string, user: AuthUser): boolean {
     `).get(userId, deviceCode, userId));
 }
 
-function canConfigureDevice(deviceCode: string, user: AuthUser): boolean {
+function canConfigureDevice(device: DeviceDashboardRow, user: AuthUser): boolean {
+    if (!device.mqtt_available) return false;
     if (user.role !== ROLES.ADMIN && user.role !== ROLES.DEV) return false;
-    return canAccessDevice(deviceCode, user);
+    return canAccessDevice(device.code, user);
 }
 
 function validateWidgets(raw: unknown, topics: DeviceTypeMqttTopic[]): DeviceDashboardWidget[] {
@@ -118,11 +122,11 @@ function validateWidgets(raw: unknown, topics: DeviceTypeMqttTopic[]): DeviceDas
 
 function buildWidgetResponse(row: DeviceDashboardRow, user: AuthUser): DeviceDashboardWidgetsResponse {
     const topics = parseDeviceTypeMqttTopics(row.mqttTopics);
-    const widgets = loadDeviceWidgets(row.code);
+    const widgets = row.mqtt_available ? loadDeviceWidgets(row.code) : [];
     const resolvedTopicByKey = new Map(
         resolveDeviceTypeMqttTopicsForDevice(row.code).map((topic) => [topic.key, topic.resolvedTopic])
     );
-    const canConfigure = canConfigureDevice(row.code, user);
+    const canConfigure = canConfigureDevice(row, user);
 
     return {
         schemaVersion: DEVICE_WIDGET_SCHEMA_VERSION,
@@ -132,7 +136,8 @@ function buildWidgetResponse(row: DeviceDashboardRow, user: AuthUser): DeviceDas
         widgets: widgets.map((widget) => {
             const stateTopicKey = getDashboardWidgetStateTopicKey(widget);
             const stateValuePath = getDashboardWidgetStateValuePath(widget);
-            const hasCommandTopic = resolvedTopicByKey.has(widget.topicKey);
+            const commandTopic = resolvedTopicByKey.get(widget.topicKey);
+            const hasCommandTopic = Boolean(commandTopic && !/[+#]/.test(commandTopic));
             const configured = widget.kind === DEVICE_WIDGET_KINDS.BUTTON
                 ? hasCommandTopic && (typeof widget.publishValue !== "undefined" || Boolean(widget.payload))
                 : widget.kind === DEVICE_WIDGET_KINDS.SWITCH
@@ -172,7 +177,7 @@ export function getDeviceDashboardWidgets(deviceCode: string, user: AuthUser) {
 export function saveDeviceDashboardWidgets(deviceCode: string, rawWidgets: unknown, user: AuthUser) {
     const row = loadDeviceDashboardRow(deviceCode);
     if (!row) throw new DeviceDashboardError(404, "Device not found");
-    if (!canConfigureDevice(deviceCode, user)) {
+    if (!canConfigureDevice(row, user)) {
         throw new DeviceDashboardError(403, "Only admin or developer can configure device widgets");
     }
     const topics = parseDeviceTypeMqttTopics(row.mqttTopics);
@@ -194,11 +199,18 @@ export function buildDeviceDashboardWidgetAction(
         throw new DeviceDashboardError(403, "You are not allowed to access this device");
     }
 
+    if (!row.mqtt_available) {
+        throw new DeviceDashboardError(409, "MQTT is disabled for this device");
+    }
+
     const widget = loadDeviceWidgets(deviceCode).find((candidate) => candidate.id === widgetId);
     if (!widget) throw new DeviceDashboardError(404, "Widget not found");
     const topic = resolveDeviceTypeMqttTopicsForDevice(deviceCode)
         .find((candidate) => candidate.key === widget.topicKey);
     if (!topic) throw new DeviceDashboardError(400, "Widget MQTT topic is not configured");
+    if (/[+#]/.test(topic.resolvedTopic)) {
+        throw new DeviceDashboardError(400, "Widget actions require a concrete MQTT topic without wildcards");
+    }
 
     if (widget.kind === DEVICE_WIDGET_KINDS.BUTTON) {
         if (typeof widget.publishValue === "undefined" && !widget.payload) {

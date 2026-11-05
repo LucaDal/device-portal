@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { authMiddleware } from "../middleware/auth";
 import { DeviceController } from "../controllers/deviceController";
-import { OtaController } from "../controllers/otaRequestController";
 import { adminOnly } from "../middleware/adminOnly";
 import { allowRoles } from "../middleware/allowRoles";
 import { ROLES } from "@shared/constants/auth";
@@ -11,6 +10,7 @@ const router = Router();
 
 router.get("/", authMiddleware, DeviceController.list);
 router.post("/", authMiddleware, adminOnly, DeviceController.create);
+router.put("/:code/mqtt", authMiddleware, adminOnly, DeviceController.updateMqtt);
 router.post("/:code/secret-code/regenerate", authMiddleware, adminOnly, DeviceController.regenerateSecretCode);
 router.put("/:code/properties", authMiddleware, DeviceController.updateProperties);
 router.get("/:code/widgets", authMiddleware, DeviceDashboardController.list);

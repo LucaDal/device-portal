@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG NODE_VERSION=20
+ARG NODE_VERSION=24
 
 # TypeScript output is architecture-independent, so build it on the host platform.
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-slim AS builder
@@ -38,7 +38,7 @@ WORKDIR /app/backend
 ENV NODE_ENV=production
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends mosquitto-clients ca-certificates \
+  && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=production-dependencies /app/backend/package*.json ./

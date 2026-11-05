@@ -5,7 +5,7 @@ export function logger(
   res: Response,
   next: NextFunction // tipo esplicitato
 ): void {
-  console.log(`[${req.method}] ${req.url}`, "BODY:", req.body);
+  console.log(`[${req.method}] ${req.path}`);
   next();
 }
 

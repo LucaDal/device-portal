@@ -8,6 +8,9 @@ export interface Device {
 }
 
 export interface DeviceWithRelations {
+    mqtt_enabled?: number;
+    type_mqtt_enabled?: number;
+    mqtt_available?: boolean;
     code: string;
     device_type_id: string;
     owner_id?: number | null;
@@ -25,7 +28,6 @@ export interface DeviceWithRelations {
 
 export interface DeviceProvisioningResult extends DeviceWithRelations {
     secret_code: string;
-    cloned_from_code?: string;
 }
 
 export interface DeviceShareRow {

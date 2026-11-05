@@ -31,7 +31,3 @@ export function getJwtSecret(): string {
 
   return secret;
 }
-
-export function getMqttHttpAuthSecret(): string {
-  return ensureStrongSecret("MQTT_HTTP_AUTH_SECRET", readSecret("MQTT_HTTP_AUTH_SECRET"));
-}

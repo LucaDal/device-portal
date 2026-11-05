@@ -9,7 +9,7 @@ function getTopic(req: any): string | undefined {
 
 function getDeviceCode(req: any): string | undefined {
     return String(
-        req.otaAuth?.deviceCode ||
+        req.deviceAuth?.deviceCode ||
         req.headers?.["x-device-code"] ||
         req.body?.deviceCode ||
         req.params?.deviceCode ||
@@ -18,7 +18,7 @@ function getDeviceCode(req: any): string | undefined {
 }
 
 function getDeviceTypeId(req: any): string | undefined {
-    return String(req.otaAuth?.deviceTypeId || req.headers?.["x-device-type-id"] || "").trim() || undefined;
+    return String(req.deviceAuth?.deviceTypeId || req.headers?.["x-device-type-id"] || "").trim() || undefined;
 }
 
 export function deviceRequestLogger(eventType: DeviceRequestLogType) {

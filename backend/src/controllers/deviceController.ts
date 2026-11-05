@@ -12,8 +12,9 @@ import {
     encryptSensitiveDeviceProperties,
     parseTypePropertyDefinitions,
 } from "../utils/devicePropertiesSecurity";
-import { generateDeviceSecret, hashDeviceSecret } from "../utils/deviceSecrets";
+import { generateDeviceSecret, hashDeviceSecret, verifyDeviceSecret } from "../utils/deviceSecrets";
 import { syncGeneratedMqttAclRulesForDevice } from "../utils/deviceTypeMqtt";
+import { ACTIVE_MQTT_DEVICE_SQL, getDeviceMqttState, parseMqttEnabled } from "../services/deviceMqttPolicy";
 import {
     syncGeneratedMqttUserAclRulesForAllUsers,
     syncGeneratedMqttUserAclRulesForUser,
@@ -146,6 +147,9 @@ export const DeviceController = {
                 d.owner_id,
                 ou.email AS owner_email,
                 d.activated,
+                COALESCE(d.mqtt_enabled, 1) AS mqtt_enabled,
+                dt.mqtt_enabled AS type_mqtt_enabled,
+                (${ACTIVE_MQTT_DEVICE_SQL}) AS mqtt_available,
                 CASE WHEN ds.user_id IS NULL THEN 0 ELSE 1 END AS is_shared,
                 dt.description AS device_type_description,
                 dt.firmware_version,
@@ -175,7 +179,11 @@ export const DeviceController = {
         sql += ` ORDER BY d.code ASC`;
 
         const stmt = DB.prepare(sql);
-        const rows = stmt.all(...params) as Array<any>;
+        const rows = (stmt.all(...params) as Array<any>).map((row) => ({
+            ...row,
+            mqtt_available: Boolean(row.mqtt_available),
+            type_mqttTopics: row.mqtt_available ? row.type_mqttTopics : "[]",
+        }));
 
         const sanitizedRows = rows.map((row) => {
             const visibleTypeDefinitions = filterVisibleTypeDefinitions(row?.type_deviceProperties);
@@ -207,24 +215,42 @@ export const DeviceController = {
 
         res.json(sanitizedRows);
     },
+    // PUT /devices/:code/mqtt — guarded by adminOnly in deviceRoutes.
+    updateMqtt(req: any, res: any) {
+        const code = String(req.params.code || "");
+        const device = getDeviceMqttState(code);
+        if (!device) return res.status(404).send({ error: "Device not found" });
+        let enabled: boolean;
+        try { enabled = parseMqttEnabled(req.body?.mqtt_enabled); }
+        catch { return res.status(400).send({ error: "mqtt_enabled must be true or false" }); }
+        if (enabled && !device.type_mqtt_enabled) {
+            return res.status(409).send({ error: "Enable MQTT on the Device Type first" });
+        }
+        DB.transaction(() => {
+            DB.prepare("UPDATE devices SET mqtt_enabled = ? WHERE code = ?").run(enabled ? 1 : 0, code);
+            syncGeneratedMqttAclRulesForDevice(code);
+            syncGeneratedMqttUserAclRulesForAllUsers();
+        })();
+        const updated = getDeviceMqttState(code)!;
+        return res.send({ ok: true, ...updated, mqtt_available: Boolean(updated.mqtt_available) });
+    },
+
     // POST /devices/register
     register(req: any, res: any) {
         const userId = Number((req.user as any).id);
-        const { code } = req.body;
-
-        const existing = DB.prepare(
-            "SELECT * FROM devices WHERE code = ?"
-        ).get(code);
-
-        if (!existing) {
-            return res.status(400).json({ message: "Device not found" });
+        const { code, secret_code: secret } = req.body || {};
+        if (typeof code !== "string" || typeof secret !== "string" || !code || !secret) {
+            return res.status(400).json({ error: "Device code and secret code are required" });
         }
-
-        const owned = DB.prepare("SELECT * FROM devices WHERE code = ? AND activated = 1").get(code);
-        if (owned) {
-            return res.status(400).json({ message: "Device already activated" });
+        const existing = DB.prepare("SELECT device_secret_hash, activated, owner_id FROM devices WHERE code = ?")
+            .get(code) as { device_secret_hash: string; activated: number; owner_id: number | null } | undefined;
+        if (!existing || !verifyDeviceSecret(secret, existing.device_secret_hash)) {
+            return res.status(403).json({ error: "Invalid device credentials" });
         }
-        DB.prepare(`UPDATE devices SET owner_id = ?, activated = 1 WHERE code = ?`).run(userId, code);
+        if (existing.activated || (existing.owner_id !== null && existing.owner_id !== userId)) {
+            return res.status(409).json({ error: "Device is already assigned" });
+        }
+        DB.prepare("UPDATE devices SET owner_id = ?, activated = 1 WHERE code = ?").run(userId, code);
         syncGeneratedMqttAclRulesForDevice(code);
         syncGeneratedMqttUserAclRulesForAllUsers();
         res.json({ ok: true });
@@ -293,7 +319,6 @@ export const DeviceController = {
         const { owner_id, owner_email, activated } = req.body;
         const code = String(req.body?.code || "").trim();
         const deviceTypeId = String(req.body?.device_type_id || "").trim();
-        const cloneFromCode = String(req.body?.clone_from_code || "").trim();
 
         if (!code || !deviceTypeId) {
             return res
@@ -301,25 +326,11 @@ export const DeviceController = {
                 .json({ error: "code and device_type_id are required" });
         }
 
+        if (!/^[A-Za-z0-9_-]+$/.test(code)) {
+            return res.status(400).json({ error: "Device code must contain only letters, numbers, underscores or hyphens" });
+        }
+
         try {
-            if (cloneFromCode === code) {
-                return res.status(400).json({ error: "A device cannot be cloned onto itself" });
-            }
-
-            if (cloneFromCode) {
-                const cloneSource = DB.prepare(
-                    "SELECT device_type_id FROM devices WHERE code = ?"
-                ).get(cloneFromCode) as { device_type_id: string } | undefined;
-                if (!cloneSource) {
-                    return res.status(400).json({ error: "Clone source device not found" });
-                }
-                if (cloneSource.device_type_id !== deviceTypeId) {
-                    return res.status(400).json({
-                        error: "Clone source and new device must use the same device type",
-                    });
-                }
-            }
-
             let resolvedOwnerId: number | null = owner_id ? Number(owner_id) : null;
             const normalizedOwnerEmail = normalizeEmail(owner_email || "");
             const deviceSecret = generateDeviceSecret();
@@ -346,62 +357,7 @@ export const DeviceController = {
                     deviceSecretHash
                 );
 
-                if (cloneFromCode) {
-                    DB.prepare(`
-                        INSERT INTO device_properties (device_code, properties)
-                        VALUES (
-                            ?,
-                            COALESCE((
-                                SELECT properties
-                                FROM device_properties
-                                WHERE device_code = ?
-                                ORDER BY id ASC
-                                LIMIT 1
-                            ), '{}')
-                        )
-                    `).run(code, cloneFromCode);
-
-                    DB.prepare(`
-                        INSERT INTO device_widgets (
-                            device_code,
-                            widget_id,
-                            label,
-                            kind,
-                            topic_key,
-                            position,
-                            state_topic_key,
-                            state_value_path,
-                            publish_value,
-                            on_value,
-                            off_value,
-                            payload,
-                            created_at,
-                            updated_at
-                        )
-                        SELECT
-                            ?,
-                            widget_id,
-                            label,
-                            kind,
-                            topic_key,
-                            position,
-                            state_topic_key,
-                            state_value_path,
-                            publish_value,
-                            on_value,
-                            off_value,
-                            payload,
-                            CURRENT_TIMESTAMP,
-                            CURRENT_TIMESTAMP
-                        FROM device_widgets
-                        WHERE device_code = ?
-                    `).run(code, cloneFromCode);
-                } else {
-                    DB.prepare(`
-                        INSERT INTO device_properties (device_code, properties)
-                        VALUES (?, ?)
-                    `).run(code, "{}");
-                }
+                DB.prepare("INSERT INTO device_properties (device_code, properties) VALUES (?, ?)").run(code, "{}");
             })();
 
             syncGeneratedMqttAclRulesForDevice(code);
@@ -421,7 +377,6 @@ WHERE d.code = ?
             res.status(201).json({
                 ...created,
                 secret_code: deviceSecret,
-                ...(cloneFromCode ? { cloned_from_code: cloneFromCode } : {}),
             });
         } catch (e: any) {
             if (e.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || e.code === "SQLITE_CONSTRAINT_UNIQUE") {

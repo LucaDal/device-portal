@@ -1,10 +1,3 @@
-export const MQTT_AUTH_RESULT = {
-    ALLOW: "allow",
-    DENY: "deny",
-} as const;
-
-export type MqttAuthResult = (typeof MQTT_AUTH_RESULT)[keyof typeof MQTT_AUTH_RESULT];
-
 export const MQTT_ACL_ACTIONS = {
     PUBLISH: "publish",
     SUBSCRIBE: "subscribe",
@@ -19,3 +12,13 @@ export const MQTT_ACL_PERMISSION = {
 } as const;
 
 export type MqttAclPermission = (typeof MQTT_ACL_PERMISSION)[keyof typeof MQTT_ACL_PERMISSION];
+
+export function deviceMqttTopics(deviceCode: string) {
+    const root = `devices/${deviceCode}`;
+    return {
+        telemetry: `${root}/telemetry/#`,
+        commands: `${root}/commands/#`,
+        availability: `${root}/telemetry/availability`,
+        state: `${root}/telemetry/state`,
+    };
+}

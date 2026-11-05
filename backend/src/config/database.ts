@@ -2,8 +2,9 @@ import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
 import { ensureAdminUser } from "./bootstrap";
+import { initializeMqttDynsecSchema } from "./mqttDynsecSchema";
 
-// Prefer user-provided DB path; fall back to a writable path inside the app directory
+// An explicit DB_PATH must work: silently switching databases can hide configuration errors.
 const FALLBACK_DB_PATH = path.resolve(process.cwd(), "data.db");
 const envDbPath = process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : undefined;
 
@@ -13,20 +14,12 @@ function preparePath(targetPath: string): string {
     return targetPath;
 }
 
-let dbPath = FALLBACK_DB_PATH;
-if (envDbPath) {
-    try {
-        dbPath = preparePath(envDbPath);
-    } catch (error) {
-        console.warn(`DB_PATH "${envDbPath}" is not usable, falling back to "${FALLBACK_DB_PATH}".`, error);
-        dbPath = preparePath(FALLBACK_DB_PATH);
-    }
-} else {
-    dbPath = preparePath(FALLBACK_DB_PATH);
-}
+const dbPath = preparePath(envDbPath || FALLBACK_DB_PATH);
 
 export const DB = new Database(dbPath);
 DB.pragma("foreign_keys = ON");
+DB.pragma("journal_mode = WAL");
+DB.pragma("busy_timeout = 5000");
 
 DB.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -35,6 +28,7 @@ DB.exec(`
         password_hash TEXT,
         role TEXT DEFAULT 'user',
         must_change_password INTEGER DEFAULT 0,
+        session_version INTEGER NOT NULL DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -46,6 +40,7 @@ DB.exec(`
         deviceProperties TEXT,
         genericProperties TEXT,
         mqttTopics TEXT,
+        mqtt_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mqtt_enabled IN (0, 1)),
         description TEXT
     );
 
@@ -205,6 +200,9 @@ const userColumns = DB.prepare("PRAGMA table_info(users)").all() as Array<{ name
 if (!userColumns.some((c) => c.name === "must_change_password")) {
     DB.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0");
 }
+if (!userColumns.some((c) => c.name === "session_version")) {
+    DB.exec("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0");
+}
 const deviceColumns = DB.prepare("PRAGMA table_info(devices)").all() as Array<{ name: string }>;
 if (!deviceColumns.some((c) => c.name === "device_secret_hash")) {
     DB.exec("ALTER TABLE devices ADD COLUMN device_secret_hash TEXT");
@@ -218,6 +216,12 @@ if (!deviceTypeColumns.some((c) => c.name === "mqttTopics")) {
     DB.exec("ALTER TABLE device_types ADD COLUMN mqttTopics TEXT DEFAULT '[]'");
 }
 
+if (!deviceTypeColumns.some((c) => c.name === "mqtt_enabled")) {
+    DB.transaction(() => {
+        DB.exec("ALTER TABLE device_types ADD COLUMN mqtt_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mqtt_enabled IN (0, 1))");
+    })();
+}
+
 const mqttAclColumns = DB.prepare("PRAGMA table_info(mqtt_acl_rules)").all() as Array<{ name: string }>;
 if (!mqttAclColumns.some((c) => c.name === "source")) {
     DB.exec("ALTER TABLE mqtt_acl_rules ADD COLUMN source TEXT NOT NULL DEFAULT 'device_type_mqtt'");
@@ -226,4 +230,5 @@ if (!mqttAclColumns.some((c) => c.name === "source_key")) {
     DB.exec("ALTER TABLE mqtt_acl_rules ADD COLUMN source_key TEXT");
 }
 
+initializeMqttDynsecSchema(DB);
 ensureAdminUser();

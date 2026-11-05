@@ -1,7 +1,7 @@
 import { DB } from "../config/database";
 
 export const DEVICE_REQUEST_LOG_TYPES = {
-    OTA_PROPERTIES: "ota_properties",
+    DEVICE_CONFIGURATION: "device_configuration",
     OTA_BUILD: "ota_build",
     OTA_VERSION: "ota_version",
     MQTT_API_PUBLISH: "mqtt_api_publish",
@@ -55,8 +55,8 @@ export function recordDeviceRequestLog(input: RecordLogInput) {
             String(input.req?.method || ""),
             String(input.req?.originalUrl || input.req?.url || ""),
             input.statusCode ?? null,
-            input.deviceCode || input.req?.otaAuth?.deviceCode || null,
-            input.deviceTypeId || input.req?.otaAuth?.deviceTypeId || null,
+            input.deviceCode || input.req?.deviceAuth?.deviceCode || null,
+            input.deviceTypeId || input.req?.deviceAuth?.deviceTypeId || null,
             input.req?.user?.id || null,
             input.req?.user?.email || null,
             input.topic || null,

@@ -25,6 +25,7 @@ pids/
 .env
 .env.local
 .env.*.local
+secrets/
 
 # ========================
 # TypeScript
@@ -50,3 +51,5 @@ Thumbs.db
 shared/*.log
 shared/*.tmp
 
+
+/shared/**/*.js

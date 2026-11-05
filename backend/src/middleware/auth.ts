@@ -27,12 +27,12 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
     }
 
     const user = DB.prepare(
-      "SELECT id, email, role, must_change_password FROM users WHERE id = ?"
+      "SELECT id, email, role, must_change_password, session_version FROM users WHERE id = ?"
     ).get(decoded.id) as
-      | { id: number; email: string; role: Role; must_change_password: number }
+      | { id: number; email: string; role: Role; must_change_password: number; session_version: number }
       | undefined;
 
-    if (!user) {
+    if (!user || decoded.sessionVersion !== user.session_version) {
       return res.status(401).send({ error: "Invalid token user" });
     }
 
@@ -44,6 +44,8 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
       });
     }
 
+    res.locals.sessionVersion = user.session_version;
+    res.locals.authExpiresAt = Number(decoded.exp) * 1000;
     req.user = user as User;
     next();
   } catch {

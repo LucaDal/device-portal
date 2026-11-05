@@ -1,17 +1,13 @@
-import { ChildProcessWithoutNullStreams, spawn } from "child_process";
+import { connect, MqttClient } from "mqtt";
 import type { Request, Response } from "express";
 import {
     MQTT_ACL_ACTIONS,
     MQTT_ACL_PERMISSION,
 } from "@shared/constants/mqtt";
-import { mqttTopicMatches } from "@shared/types/mqtt";
 import { DB } from "../config/database";
-import { appendBrokerAuthArgs, loadBrokerSettings, validateBrokerTlsSettings } from "../utils/mqttBrokerSettings";
-import {
-    MOSQUITTO_STREAM_FORMAT,
-    MosquittoStreamParser,
-} from "../utils/mosquittoStreamParser";
-import { MQTT_USER_ACL_SYNCED_EVENT, mqttAclEvents } from "./mqttAclEvents";
+import { brokerClientOptions, loadBrokerSettings } from "../utils/mqttBrokerSettings";
+import { canUserAccessMqttTopic } from "../utils/mqttUserAcl";
+import { MQTT_USER_ACL_SYNCED_EVENT, MQTT_BROKER_SETTINGS_CHANGED_EVENT, mqttAclEvents } from "./mqttAclEvents";
 
 type MqttStreamMessage = {
     topic: string;
@@ -23,6 +19,7 @@ type MqttStreamMessage = {
 type SseClient = {
     id: string;
     userId: number;
+    sessionVersion: number;
     res: Response;
     topics: Set<string>;
     heartbeat: ReturnType<typeof setInterval>;
@@ -35,18 +32,20 @@ const CLIENT_FLUSH_INTERVAL_MS = 250;
 const SUBSCRIBER_RESTART_DEBOUNCE_MS = 500;
 const SUBSCRIBER_RETRY_MS = 5000;
 const MAX_CACHED_MESSAGES = 500;
+const MAX_CACHED_BYTES = 8 * 1024 * 1024;
+const MAX_PAYLOAD_BYTES = 256 * 1024;
+const MAX_CLIENT_BUFFER_BYTES = 1024 * 1024;
+let cachedBytes = 0;
 
 const clients = new Map<string, SseClient>();
 const topicRefCounts = new Map<string, number>();
 const cachedMessages = new Map<string, MqttStreamMessage>();
 
-let subscriber: ChildProcessWithoutNullStreams | null = null;
+let subscriber: MqttClient | null = null;
 let subscriberGeneration = 0;
 let activeTopicKey = "";
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
-const streamParser = new MosquittoStreamParser();
-let subscriberStderr = "";
 
 function getReadableTopicPatternsForUser(userId: number): string[] {
     const rows = DB.prepare(`
@@ -69,6 +68,11 @@ function getReadableTopicPatternsForUser(userId: number): string[] {
 }
 
 function sendEvent(res: Response, event: string, data: unknown) {
+    if (res.destroyed || res.writableEnded) return;
+    if (res.writableLength > MAX_CLIENT_BUFFER_BYTES) {
+        res.destroy();
+        return;
+    }
     res.write(`event: ${event}\n`);
     res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
@@ -97,17 +101,24 @@ function parsePayload(payload: string): unknown {
 }
 
 function cacheMessage(message: MqttStreamMessage) {
+    const previous = cachedMessages.get(message.topic);
+    if (previous) cachedBytes -= Buffer.byteLength(previous.payload);
+    cachedMessages.delete(message.topic);
     cachedMessages.set(message.topic, message);
-    if (cachedMessages.size <= MAX_CACHED_MESSAGES) return;
-
-    const oldestKey = cachedMessages.keys().next().value;
-    if (oldestKey) {
-        cachedMessages.delete(oldestKey);
+    cachedBytes += Buffer.byteLength(message.payload);
+    while (cachedMessages.size > MAX_CACHED_MESSAGES || cachedBytes > MAX_CACHED_BYTES) {
+        const oldest = cachedMessages.values().next().value!;
+        cachedBytes -= Buffer.byteLength(oldest.payload);
+        cachedMessages.delete(oldest.topic);
     }
 }
 
 function queueClientMessage(client: SseClient, message: MqttStreamMessage) {
     client.pending.set(message.topic, message);
+    if (client.pending.size > MAX_CACHED_MESSAGES) {
+        client.res.destroy();
+        return;
+    }
     if (client.flushTimer) return;
 
     client.flushTimer = setTimeout(() => {
@@ -115,16 +126,18 @@ function queueClientMessage(client: SseClient, message: MqttStreamMessage) {
         const messages = Array.from(client.pending.values());
         client.pending.clear();
         for (const pendingMessage of messages) {
-            sendEvent(client.res, "mqtt-message", pendingMessage);
+            if (clientCanReceiveTopic(client, pendingMessage.topic)) {
+                sendEvent(client.res, "mqtt-message", pendingMessage);
+            }
         }
     }, CLIENT_FLUSH_INTERVAL_MS);
 }
 
 function clientCanReceiveTopic(client: SseClient, topic: string): boolean {
-    for (const pattern of client.topics) {
-        if (mqttTopicMatches(pattern, topic)) return true;
-    }
-    return false;
+    const user = DB.prepare("SELECT must_change_password, session_version FROM users WHERE id = ?").get(client.userId) as
+        { must_change_password: number; session_version: number } | undefined;
+    if (!user || user.must_change_password || user.session_version !== client.sessionVersion) return false;
+    return canUserAccessMqttTopic(client.userId, MQTT_ACL_ACTIONS.SUBSCRIBE, topic);
 }
 
 function deliverMessage(message: MqttStreamMessage) {
@@ -145,51 +158,10 @@ function createStreamMessage(topic: string, payload: string): MqttStreamMessage 
     };
 }
 
-function handleSubscriberStdout(chunk: Buffer) {
-    try {
-        for (const record of streamParser.push(chunk)) {
-            deliverMessage(createStreamMessage(record.topic, record.payload));
-        }
-    } catch (err: any) {
-        const message = err?.message || "MQTT subscriber returned malformed output";
-        console.error(message);
-        broadcastServiceError(message);
-    }
-}
-
-function buildSubscriberArgs(topicPatterns: string[]) {
-    const settings = loadBrokerSettings();
-    if (!settings) {
-        throw new Error("MQTT broker settings not configured. Configure them in Settings.");
-    }
-    validateBrokerTlsSettings(settings);
-
-    const args = [
-        "-h",
-        settings.host,
-        "-p",
-        String(settings.port),
-        "-i",
-        `${settings.clientIdPrefix}-sse-${process.pid}-${Date.now()}`,
-        "-N",
-        "-F",
-        MOSQUITTO_STREAM_FORMAT,
-    ];
-
-    for (const pattern of topicPatterns) {
-        args.push("-t", pattern);
-    }
-
-    appendBrokerAuthArgs(args, settings);
-    return args;
-}
-
 function stopSubscriber() {
     if (!subscriber) return;
-    subscriber.kill("SIGTERM");
+    subscriber.end(true);
     subscriber = null;
-    streamParser.reset();
-    subscriberStderr = "";
 }
 
 function scheduleSubscriberRefresh(delayMs = SUBSCRIBER_RESTART_DEBOUNCE_MS) {
@@ -232,35 +204,30 @@ function refreshSubscriber(force = false) {
     }
 
     try {
-        const args = buildSubscriberArgs(topicPatterns);
-        subscriberStderr = "";
-        subscriber = spawn("mosquitto_sub", args);
-
-        subscriber.stdout.on("data", handleSubscriberStdout);
-        subscriber.stderr.on("data", (chunk) => {
-            const output = String(chunk).trim();
-            if (!output) return;
-            subscriberStderr = `${subscriberStderr}\n${output}`.trim().slice(-2000);
-            console.error("MQTT subscriber stderr:", output);
+        const settings = loadBrokerSettings();
+        if (!settings) throw new Error("MQTT broker settings not configured");
+        const current = connect(brokerClientOptions(settings));
+        subscriber = current;
+        current.on("connect", () => {
+            void current.subscribeAsync(topicPatterns, { qos: 1 }).then((grants) => {
+                if (grants.some((grant) => Number(grant.qos) > 2)) {
+                    broadcastServiceError("MQTT subscription denied");
+                }
+            }).catch(() => broadcastServiceError("MQTT subscription failed"));
         });
-        subscriber.on("error", (err: any) => {
-            if (generation !== subscriberGeneration) return;
-            const message = err?.code === "ENOENT"
-                ? "mosquitto_sub command not found on server"
-                : "MQTT subscriber failed";
-            console.error(message, err);
-            broadcastServiceError(message);
-            subscriber = null;
-            scheduleSubscriberRetry(generation);
+        current.on("message", (topic, payload) => {
+            if (generation === subscriberGeneration && payload.length <= MAX_PAYLOAD_BYTES) {
+                deliverMessage(createStreamMessage(topic, payload.toString()));
+            }
         });
-        subscriber.on("close", (code) => {
+        current.on("error", () => {
+            if (generation === subscriberGeneration) broadcastServiceError("MQTT connection failed");
+        });
+        current.on("close", () => {
             if (generation !== subscriberGeneration) return;
             subscriber = null;
             if (topicRefCounts.size > 0) {
-                const detail = subscriberStderr || `exit code ${code}`;
-                const message = `MQTT subscription failed: ${detail}`;
-                console.error(message);
-                broadcastServiceError(message);
+                broadcastServiceError("MQTT disconnected; reconnecting");
                 scheduleSubscriberRetry(generation);
             }
         });
@@ -347,6 +314,16 @@ mqttAclEvents.on(MQTT_USER_ACL_SYNCED_EVENT, (userId: number) => {
     refreshUserClientTopics(Number(userId));
 });
 
+mqttAclEvents.on(MQTT_BROKER_SETTINGS_CHANGED_EVENT, () => {
+    cachedMessages.clear();
+    cachedBytes = 0;
+    for (const client of clients.values()) client.pending.clear();
+    subscriberGeneration += 1;
+    stopSubscriber();
+    activeTopicKey = "";
+    scheduleSubscriberRefresh();
+});
+
 export function registerMqttSseClient(userId: number, req: Request, res: Response) {
     const topics = getReadableTopicPatternsForUser(userId);
 
@@ -362,9 +339,15 @@ export function registerMqttSseClient(userId: number, req: Request, res: Respons
     const client: SseClient = {
         id: clientId,
         userId,
+        sessionVersion: res.locals.sessionVersion,
         res,
         topics: new Set(topics),
         heartbeat: setInterval(() => {
+            if (res.locals.authExpiresAt && Date.now() >= res.locals.authExpiresAt) {
+                cleanupClient(clientId);
+                res.end();
+                return;
+            }
             res.write(": ping\n\n");
         }, HEARTBEAT_INTERVAL_MS),
         pending: new Map(),
@@ -383,5 +366,18 @@ export function registerMqttSseClient(userId: number, req: Request, res: Respons
     sendCachedMessages(client);
     scheduleSubscriberRefresh();
 
-    req.on("close", () => cleanupClient(clientId));
+    res.on("close", () => cleanupClient(clientId));
+}
+
+export function closeMqttStreams() {
+    for (const client of clients.values()) {
+        cleanupClient(client.id);
+        client.res.end();
+    }
+    if (restartTimer) clearTimeout(restartTimer);
+    if (retryTimer) clearTimeout(retryTimer);
+    subscriberGeneration += 1;
+    stopSubscriber();
+    cachedMessages.clear();
+    cachedBytes = 0;
 }

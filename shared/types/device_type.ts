@@ -6,4 +6,5 @@ export interface DeviceType {
     deviceProperties?: string;
     genericProperties?: string;
     mqttTopics?: string;
+    mqtt_enabled?: number;
 }

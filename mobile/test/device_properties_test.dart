@@ -37,15 +37,40 @@ Map<String, dynamic> deviceJson({bool encoded = true}) {
 
 class PendingDashboardService extends DeviceService {
   final Future<DeviceDashboard> result;
+  int requests = 0;
 
   PendingDashboardService(this.result)
     : super(ApiClient(baseUrl: 'https://example.invalid/api/'));
 
   @override
-  Future<DeviceDashboard> getDashboard(String deviceCode) => result;
+  Future<DeviceDashboard> getDashboard(String deviceCode) {
+    requests++;
+    return result;
+  }
 }
 
 void main() {
+  testWidgets('devices without MQTT show properties without loading widgets', (
+    tester,
+  ) async {
+    final service = PendingDashboardService(
+      Completer<DeviceDashboard>().future,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeviceDashboardPage(
+          device: Device.fromJson({...deviceJson(), 'mqtt_available': false}),
+          deviceService: service,
+        ),
+      ),
+    );
+    expect(find.text('Proprietà'), findsOneWidget);
+    expect(find.text('Abilitato'), findsOneWidget);
+    expect(find.text('Widget'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(service.requests, 0);
+  });
+
   test(
     'decodes encoded and object properties without inventing saved values',
     () {

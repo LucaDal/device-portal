@@ -3,14 +3,12 @@
   "dependencies": {
     "@types/bcrypt": "^6.0.0",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/body-parser": "^1.19.6",
-    "ajv": "^8.18.0",
     "bcrypt": "^6.0.0",
     "better-sqlite3": "^12.8.0",
-    "body-parser": "^2.2.2",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
+    "mqtt": "^5.16.1",
     "multer": "^2.1.1"
   },
   "devDependencies": {
@@ -22,6 +20,9 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
+    "test:device-routes": "node --test test/deviceRoutes.test.cjs",
+    "test:mqtt-settings": "node --test test/mqttBrokerSettings.test.cjs",
+    "test:mqtt-dynsec": "node --test test/mqttDynsec.test.cjs",
     "test:device-properties": "node --test test/deviceProperties.test.cjs",
     "dev": "pm2 start ecosystem.config.cjs --only device-portal-dev",
     "start": "pm2 start ecosystem.config.cjs --only device-portal-prod",

@@ -1,8 +1,8 @@
 import express from "express";
-import bodyParser from "body-parser";
 import { logger } from "./middleware/logger";
 import authRoutes from "./routes/authRoutes";
 import deviceRoutes from "./routes/deviceRoutes";
+import deviceProvisioningRoutes from "./routes/deviceProvisioningRoutes";
 import deviceTypeRoutes from "./routes/deviceTypeRoutes";
 import managementRoutes from "./routes/managementRoute";
 import otaRoutes from "./routes/otaRoutes";
@@ -13,12 +13,14 @@ import { securityHeadersMiddleware } from "./middleware/securityHeaders";
 import { sensitiveIpRateLimitMiddleware } from "./middleware/rateLimit";
 import { syncGeneratedMqttAclRulesForAllDevices } from "./utils/deviceTypeMqtt";
 import { syncGeneratedMqttUserAclRulesForAllUsers } from "./utils/mqttUserAcl";
+import { closeMqttStreams } from "./services/mqttSseService";
+import { startMqttDynsecService } from "./services/mqttDynsecService";
 
 declare global {
   namespace Express {
     interface Request {
       user?: User;
-      otaAuth?: {
+      deviceAuth?: {
         deviceCode?: string;
         deviceTypeId?: string;
       };
@@ -30,6 +32,7 @@ const app = express();
 app.set("trust proxy", 1);
 syncGeneratedMqttAclRulesForAllDevices();
 syncGeneratedMqttUserAclRulesForAllUsers();
+const dynsecService = startMqttDynsecService();
 
 const ENABLE_REQUEST_LOGS = process.env.ENABLE_REQUEST_LOGS !== "false";
 const ALLOWED_CORS_ORIGINS = String(process.env.CORS_ALLOWED_ORIGINS || "")
@@ -74,11 +77,18 @@ if (ENABLE_REQUEST_LOGS) {
   app.use(logger);
 }
 // Routes
-app.use("/auth", bodyParser.json(),  authRoutes);
-app.use("/manage", bodyParser.json(), managementRoutes);
-app.use("/devices", bodyParser.json(), deviceRoutes);
+app.use("/auth", express.json(),  authRoutes);
+app.use("/manage", express.json(), managementRoutes);
+app.use("/device", sensitiveIpRateLimitMiddleware, deviceProvisioningRoutes);
+app.use("/devices", express.json(), deviceRoutes);
 app.use("/ota", sensitiveIpRateLimitMiddleware, otaRoutes);
 app.use("/device-types", deviceTypeRoutes);
-app.use("/mqtt", bodyParser.json(), sensitiveIpRateLimitMiddleware, mqttRoutes);
+app.use("/mqtt", express.json(), sensitiveIpRateLimitMiddleware, mqttRoutes);
 
-app.listen(3000, () => console.log("Server running on port 3000"));
+const server = app.listen(3000, () => console.log("Server running on port 3000"));
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    closeMqttStreams();
+    server.close(() => { void dynsecService?.stop(); });
+  });
+}

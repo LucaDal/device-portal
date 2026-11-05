@@ -1,7 +1,12 @@
 import { MqttAclAction, MqttAclPermission } from "../constants/mqtt";
 
 export function mqttTopicMatches(pattern: string, topic: string): boolean {
+    if (!pattern || !topic || pattern.includes("\u0000") || topic.includes("\u0000")) return false;
+    if (topic.startsWith("$") && !pattern.startsWith("$")) return false;
     const patternParts = pattern.split("/");
+    if (patternParts.some((part, index) =>
+        (part.includes("#") && (part !== "#" || index !== patternParts.length - 1)) ||
+        (part.includes("+") && part !== "+"))) return false;
     const topicParts = topic.split("/");
 
     for (let index = 0; index < patternParts.length; index += 1) {
@@ -45,11 +50,32 @@ export interface MqttUserAclRule {
     created_at: string;
 }
 
-export interface DeviceCertificateSummary {
-    client_id: string;
-    device_code: string;
-    cert_fingerprint_sha256: string;
-    enabled: number;
-    created_at: string;
-    updated_at: string;
+export interface MqttDynsecAcl {
+    acltype: string;
+    topic: string;
+    allow: boolean;
+    priority: number;
+}
+
+export interface MqttDynsecJob {
+    deviceCode: string;
+    revision: number;
+    attempts: number;
+    nextAttemptAt: number;
+    lastError: string | null;
+}
+
+export interface MqttDynsecStatus {
+    enabled: boolean;
+    jobs: MqttDynsecJob[];
+}
+
+export interface MqttDeviceAclView {
+    enabled: boolean;
+    rules: Pick<MqttAclRule, "action" | "topic_pattern" | "permission" | "priority">[];
+    expected: MqttDynsecAcl[];
+    applied: MqttDynsecAcl[] | null;
+    clientEnabled: boolean | null;
+    job: Pick<MqttDynsecJob, "attempts" | "nextAttemptAt" | "lastError"> | null;
+    brokerError?: string;
 }

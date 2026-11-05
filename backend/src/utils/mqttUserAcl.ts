@@ -2,6 +2,7 @@ import {
     MQTT_ACL_ACTIONS,
     MQTT_ACL_PERMISSION,
     MqttAclAction,
+    deviceMqttTopics,
 } from "@shared/constants/mqtt";
 import { mqttTopicMatches } from "@shared/types/mqtt";
 import {
@@ -14,6 +15,8 @@ import { DB } from "../config/database";
 import { resolveMqttTopicTemplate } from "./mqttTopicTemplate";
 import { MQTT_USER_ACL_SYNCED_EVENT, mqttAclEvents } from "../services/mqttAclEvents";
 import { loadDeviceWidgets } from "../repositories/deviceWidgetRepository";
+import { ACTIVE_MQTT_DEVICE_SQL } from "../services/deviceMqttPolicy";
+import { dynsecEnabled } from "./mqttConfiguration";
 
 type UserAclDevice = {
     code: string;
@@ -51,7 +54,7 @@ function getAccessibleDevicesForUser(userId: number): UserAclDevice[] {
                 dt.mqttTopics AS mqttTopics
             FROM devices d
             JOIN device_types dt ON dt.id = d.device_type_id
-            WHERE d.activated = 1
+            WHERE ${ACTIVE_MQTT_DEVICE_SQL}
             ORDER BY d.code ASC
         `).all() as UserAclDevice[];
     }
@@ -66,7 +69,7 @@ function getAccessibleDevicesForUser(userId: number): UserAclDevice[] {
         FROM devices d
         JOIN device_types dt ON dt.id = d.device_type_id
         WHERE d.owner_id = ?
-          AND d.activated = 1
+          AND ${ACTIVE_MQTT_DEVICE_SQL}
 
         UNION ALL
 
@@ -80,14 +83,14 @@ function getAccessibleDevicesForUser(userId: number): UserAclDevice[] {
         JOIN devices d ON d.code = ds.device_code
         JOIN device_types dt ON dt.id = d.device_type_id
         WHERE ds.user_id = ?
-          AND d.activated = 1
+          AND ${ACTIVE_MQTT_DEVICE_SQL}
         ORDER BY code ASC
     `).all(userId, userId) as UserAclDevice[];
 }
 
 function findLinkedTargetTopic(topic: DeviceTypeMqttTopic): DeviceTypeMqttTopic | undefined {
     if (!topic.linkedTopic) return undefined;
-    const row = DB.prepare("SELECT mqttTopics FROM device_types WHERE id = ?").get(
+    const row = DB.prepare("SELECT mqttTopics FROM device_types WHERE id = ? AND mqtt_enabled = 1").get(
         topic.linkedTopic.deviceTypeId
     ) as { mqttTopics?: string | null } | undefined;
     return parseDeviceTypeMqttTopics(row?.mqttTopics).find((target) => target.key === topic.linkedTopic?.topicKey);
@@ -100,7 +103,8 @@ function getTargetDevicesForTopic(
 ): UserAclDevice[] {
     if (!topic.linkedTopic) return [currentDevice];
 
-    return accessibleDevices.filter((device) => device.device_type_id === topic.linkedTopic?.deviceTypeId);
+    return accessibleDevices.filter((device) => device.device_type_id === topic.linkedTopic?.deviceTypeId &&
+        device.owner_id === currentDevice.owner_id && currentDevice.owner_id !== null);
 }
 
 function addRule(
@@ -185,6 +189,17 @@ function buildGeneratedUserAclRules(userId: number): UserAclRule[] {
     const seen = new Set<string>();
 
     for (const device of devices) {
+        if (dynsecEnabled()) {
+            const { availability, state } = deviceMqttTopics(device.code);
+            for (const [name, topic] of Object.entries({ availability, state })) {
+                addRule(rules, seen, {
+                    userId, action: MQTT_ACL_ACTIONS.SUBSCRIBE,
+                    topicPattern: topic,
+                    source: device.access_source === "shared" ? "generated_shared_device" : "generated_owned_device",
+                    sourceDeviceCode: device.code, sourceKey: `builtin:${name}`,
+                });
+            }
+        }
         const topics = parseDeviceTypeMqttTopics(device.mqttTopics);
         const stateTopicKeys = new Set(
             loadDeviceWidgets(device.code)
@@ -196,7 +211,9 @@ function buildGeneratedUserAclRules(userId: number): UserAclRule[] {
             const topicTemplate = topic.linkedTopic
                 ? linkedTargetTopic?.topic
                 : topic.topic;
-            if (!topicTemplate) continue;
+            if (!topicTemplate || (topic.linkedTopic && (linkedTargetTopic?.linkedTopic ||
+                !topicTemplate.split("/").includes("{ownerId}") ||
+                (topic.action !== MQTT_ACL_ACTIONS.SUBSCRIBE && topicTemplate.includes("{deviceCode}"))))) continue;
 
             const targetDevices = getTargetDevicesForTopic(device, topic, devices);
             for (const targetDevice of targetDevices) {

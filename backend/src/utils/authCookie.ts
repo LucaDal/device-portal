@@ -15,7 +15,7 @@ function parseCookieHeader(rawHeader: string | undefined): Record<string, string
     const value = part.slice(separatorIndex + 1).trim();
     if (!key) return acc;
 
-    acc[key] = decodeURIComponent(value);
+    try { acc[key] = decodeURIComponent(value); } catch { /* Ignore malformed cookies. */ }
     return acc;
   }, {});
 }

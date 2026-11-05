@@ -1,17 +1,20 @@
-# mobile
+# Client Android
 
-A new Flutter project.
+App Flutter in sviluppo. Sono presenti login, lista device, proprietà in sola lettura,
+elenco dei widget e navigazione alle impostazioni del device.
+Azioni, realtime e widget Home Android sono ancora da implementare.
 
-## Getting Started
+```sh
+flutter pub get
+flutter run
+```
 
-This project is a starting point for a Flutter application.
+La base API è configurata in `lib/main.dart`: cambiarla per usare il proprio server HTTPS.
+Il client condivide Dio e un cookie jar in memoria; la sessione non viene conservata dopo il riavvio.
 
-A few resources to get you started if this is your first Flutter project:
+```sh
+flutter analyze
+flutter test
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Per proseguire lo sviluppo seguire la [guida Flutter](../FLUTTER-GUIDE.md).

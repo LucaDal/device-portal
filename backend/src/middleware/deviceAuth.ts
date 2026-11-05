@@ -4,9 +4,9 @@ import { adminOnly } from "./adminOnly";
 import { basicAuthMiddleware } from "./basicAuth";
 import { verifyDeviceSecret } from "../utils/deviceSecrets";
 
-export const OTA_DEVICE_CODE_HEADER = "x-device-code";
-export const OTA_DEVICE_TYPE_ID_HEADER = "x-device-type-id";
-export const OTA_DEVICE_SECRET_HEADER = "x-device-secret";
+export const DEVICE_CODE_HEADER = "x-device-code";
+export const DEVICE_TYPE_ID_HEADER = "x-device-type-id";
+export const DEVICE_SECRET_HEADER = "x-device-secret";
 
 function readHeader(req: Request, headerName: string): string {
   const value = req.headers[headerName];
@@ -71,14 +71,14 @@ function loadDevicesByType(deviceTypeId: string) {
 }
 
 export function requireDeviceCodeSecret(req: Request, res: Response, next: NextFunction) {
-  const deviceCode = readHeader(req, OTA_DEVICE_CODE_HEADER);
+  const deviceCode = readHeader(req, DEVICE_CODE_HEADER);
   if (!deviceCode) {
-    return missingHeader(res, OTA_DEVICE_CODE_HEADER);
+    return missingHeader(res, DEVICE_CODE_HEADER);
   }
 
-  const deviceSecret = readHeader(req, OTA_DEVICE_SECRET_HEADER);
+  const deviceSecret = readHeader(req, DEVICE_SECRET_HEADER);
   if (!deviceSecret) {
-    return missingHeader(res, OTA_DEVICE_SECRET_HEADER);
+    return missingHeader(res, DEVICE_SECRET_HEADER);
   }
 
   const device = loadDeviceByCode(deviceCode);
@@ -90,7 +90,7 @@ export function requireDeviceCodeSecret(req: Request, res: Response, next: NextF
     return invalidDeviceAuth(res);
   }
 
-  req.otaAuth = {
+  req.deviceAuth = {
     deviceCode: device.code,
     deviceTypeId: device.device_type_id,
   };
@@ -98,14 +98,14 @@ export function requireDeviceCodeSecret(req: Request, res: Response, next: NextF
 }
 
 export function requireDeviceTypeSecret(req: Request, res: Response, next: NextFunction) {
-  const deviceTypeId = readHeader(req, OTA_DEVICE_TYPE_ID_HEADER);
+  const deviceTypeId = readHeader(req, DEVICE_TYPE_ID_HEADER);
   if (!deviceTypeId) {
-    return missingHeader(res, OTA_DEVICE_TYPE_ID_HEADER);
+    return missingHeader(res, DEVICE_TYPE_ID_HEADER);
   }
 
-  const deviceSecret = readHeader(req, OTA_DEVICE_SECRET_HEADER);
+  const deviceSecret = readHeader(req, DEVICE_SECRET_HEADER);
   if (!deviceSecret) {
-    return missingHeader(res, OTA_DEVICE_SECRET_HEADER);
+    return missingHeader(res, DEVICE_SECRET_HEADER);
   }
 
   const device = loadDevicesByType(deviceTypeId).find(
@@ -115,7 +115,7 @@ export function requireDeviceTypeSecret(req: Request, res: Response, next: NextF
     return invalidDeviceAuth(res);
   }
 
-  req.otaAuth = {
+  req.deviceAuth = {
     deviceCode: device.code,
     deviceTypeId: device.device_type_id,
   };
@@ -127,22 +127,22 @@ export async function requireDeviceTypeSecretOrAdminBasic(
   res: Response,
   next: NextFunction
 ) {
-  const deviceTypeId = readHeader(req, OTA_DEVICE_TYPE_ID_HEADER);
+  const deviceTypeId = readHeader(req, DEVICE_TYPE_ID_HEADER);
   if (!deviceTypeId) {
-    return missingHeader(res, OTA_DEVICE_TYPE_ID_HEADER);
+    return missingHeader(res, DEVICE_TYPE_ID_HEADER);
   }
 
-  const deviceSecret = readHeader(req, OTA_DEVICE_SECRET_HEADER);
+  const deviceSecret = readHeader(req, DEVICE_SECRET_HEADER);
   if (deviceSecret) {
     return requireDeviceTypeSecret(req, res, next);
   }
 
   const authHeader = String(req.headers.authorization || "");
   if (!authHeader.startsWith("Basic ")) {
-    return missingHeader(res, OTA_DEVICE_SECRET_HEADER);
+    return missingHeader(res, DEVICE_SECRET_HEADER);
   }
 
-  req.otaAuth = { deviceTypeId };
+  req.deviceAuth = { deviceTypeId };
 
   const basicOk = await runMiddleware(req, res, basicAuthMiddleware);
   if (!basicOk) return;
@@ -154,19 +154,19 @@ export async function requireDeviceTypeSecretOrAdminBasic(
 }
 
 export function requireDeviceCodeTypeSecret(req: Request, res: Response, next: NextFunction) {
-  const deviceCode = readHeader(req, OTA_DEVICE_CODE_HEADER);
+  const deviceCode = readHeader(req, DEVICE_CODE_HEADER);
   if (!deviceCode) {
-    return missingHeader(res, OTA_DEVICE_CODE_HEADER);
+    return missingHeader(res, DEVICE_CODE_HEADER);
   }
 
-  const deviceTypeId = readHeader(req, OTA_DEVICE_TYPE_ID_HEADER);
+  const deviceTypeId = readHeader(req, DEVICE_TYPE_ID_HEADER);
   if (!deviceTypeId) {
-    return missingHeader(res, OTA_DEVICE_TYPE_ID_HEADER);
+    return missingHeader(res, DEVICE_TYPE_ID_HEADER);
   }
 
-  const deviceSecret = readHeader(req, OTA_DEVICE_SECRET_HEADER);
+  const deviceSecret = readHeader(req, DEVICE_SECRET_HEADER);
   if (!deviceSecret) {
-    return missingHeader(res, OTA_DEVICE_SECRET_HEADER);
+    return missingHeader(res, DEVICE_SECRET_HEADER);
   }
 
   const device = loadDeviceByCode(deviceCode);
@@ -182,7 +182,7 @@ export function requireDeviceCodeTypeSecret(req: Request, res: Response, next: N
     return invalidDeviceAuth(res);
   }
 
-  req.otaAuth = {
+  req.deviceAuth = {
     deviceCode: device.code,
     deviceTypeId: device.device_type_id,
   };
@@ -190,11 +190,11 @@ export function requireDeviceCodeTypeSecret(req: Request, res: Response, next: N
 }
 
 export function requireDeviceTypeIdHeader(req: Request, res: Response, next: NextFunction) {
-  const deviceTypeId = readHeader(req, OTA_DEVICE_TYPE_ID_HEADER);
+  const deviceTypeId = readHeader(req, DEVICE_TYPE_ID_HEADER);
   if (!deviceTypeId) {
-    return missingHeader(res, OTA_DEVICE_TYPE_ID_HEADER);
+    return missingHeader(res, DEVICE_TYPE_ID_HEADER);
   }
 
-  req.otaAuth = { deviceTypeId };
+  req.deviceAuth = { deviceTypeId };
   next();
 }

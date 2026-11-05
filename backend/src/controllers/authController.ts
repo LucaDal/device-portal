@@ -2,8 +2,6 @@ import { DB } from "../config/database";
 import bcrypt from "bcrypt";
 import { generateToken } from "../utils/jwt";
 import { UserWithPassword } from "@shared/types/user";
-import { UsersController } from "./usersController";
-import { ROLES, Role } from "@shared/constants/auth";
 import { clearAuthCookie, setAuthCookie } from "../utils/authCookie";
 import { syncGeneratedMqttUserAclRulesForUser } from "../utils/mqttUserAcl";
 
@@ -19,28 +17,17 @@ function toPublicUser(row: UserWithPassword) {
 
 export const AuthController = {
 
-    signup: async (req: any, res: any) => {
-        const { email, password, role } = req.body;
-        try {
-            const selectedRole: Role = Object.values(ROLES).includes(role) ? role : ROLES.USER;
-            const row_id = UsersController.createUser(email, password, selectedRole);
-            res.send({ id: row_id });
-        } catch (err: any) {
-            if (err.message === "EMAIL_EXISTS") {
-                return res.status(400).send({ error: "Email already exists" });
-            }
-            res.status(500).send({ error: "Server error" });
-        }
-    },
-
     login: async (req: any, res: any) => {
-        const { email, password } = req.body;
+        const { email, password } = req.body || {};
+        if (typeof email !== "string" || typeof password !== "string" || !email.trim() || !password) {
+            return res.status(400).send({ error: "Email and password are required" });
+        }
         const normalizedEmail = String(email).trim().toLowerCase();
         const row = DB.prepare("SELECT * FROM users WHERE email = ?").get(
             normalizedEmail
         ) as UserWithPassword | undefined;
 
-        if (!row) return res.status(401).send({ error: "Invalid" });
+        if (!row?.password_hash) return res.status(401).send({ error: "Invalid" });
 
         const ok = await bcrypt.compare(password, row.password_hash);
         if (!ok) return res.status(401).send({ error: "invalid" });
@@ -107,7 +94,7 @@ export const AuthController = {
                 newPassword?: string;
             };
 
-            if (!userId || !currentPassword || !newPassword) {
+            if (!userId || typeof currentPassword !== "string" || typeof newPassword !== "string" || !currentPassword || !newPassword) {
                 return res.status(400).send({ error: "Missing password fields" });
             }
 
@@ -118,7 +105,7 @@ export const AuthController = {
             }
 
             const row = DB.prepare(
-                "SELECT id, email, password_hash FROM users WHERE id = ?"
+                "SELECT id, email, password_hash, session_version FROM users WHERE id = ?"
             ).get(userId) as UserWithPassword | undefined;
             if (!row) {
                 return res.status(404).send({ error: "User not found" });
@@ -131,12 +118,13 @@ export const AuthController = {
 
             const nextHash = await bcrypt.hash(newPassword, 12);
             DB.prepare(
-                "UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?"
+                "UPDATE users SET password_hash = ?, must_change_password = 0, session_version = session_version + 1 WHERE id = ?"
             ).run(nextHash, userId);
             DB.prepare(
                 "UPDATE user_invitations SET accepted_at = COALESCE(accepted_at, CURRENT_TIMESTAMP) WHERE email = ?"
             ).run(row.email);
 
+            setAuthCookie(req, res, generateToken({ ...row, session_version: (row.session_version ?? 0) + 1 }));
             return res.send({ ok: true });
         } catch (err) {
             console.error(err);

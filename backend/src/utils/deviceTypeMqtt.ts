@@ -7,6 +7,7 @@ import {
 import { DB } from "../config/database";
 import { resolveMqttTopicTemplate } from "./mqttTopicTemplate";
 import { loadDeviceWidgets } from "../repositories/deviceWidgetRepository";
+import { getDeviceMqttState } from "../services/deviceMqttPolicy";
 
 type DeviceMqttContext = {
     deviceCode: string;
@@ -43,7 +44,7 @@ function loadDeviceMqttRow(deviceCode: string): DeviceMqttRow | undefined {
 }
 
 function loadDeviceTypeTopics(deviceTypeId: string): DeviceTypeMqttTopic[] {
-    const row = DB.prepare("SELECT mqttTopics FROM device_types WHERE id = ?").get(deviceTypeId) as
+    const row = DB.prepare("SELECT mqttTopics FROM device_types WHERE id = ? AND mqtt_enabled = 1").get(deviceTypeId) as
         | { mqttTopics?: string | null }
         | undefined;
     return parseDeviceTypeMqttTopics(row?.mqttTopics);
@@ -55,8 +56,7 @@ function findLinkedTopicTarget(
     if (!topic.linkedTopic) return undefined;
 
     const targetTopics = loadDeviceTypeTopics(topic.linkedTopic.deviceTypeId);
-    return targetTopics.find((row) => row.key === topic.linkedTopic?.topicKey)
-        || targetTopics.find((row) => Boolean(topic.topic) && row.topic === topic.topic);
+    return targetTopics.find((row) => row.key === topic.linkedTopic?.topicKey && !row.linkedTopic);
 }
 
 function buildLinkedTopicSnapshot(
@@ -65,7 +65,6 @@ function buildLinkedTopicSnapshot(
 ): DeviceTypeMqttTopic {
     return {
         ...topic,
-        key: target.key,
         label: target.label || "",
         topic: target.topic || "",
         linkedTopic: topic.linkedTopic
@@ -110,7 +109,8 @@ function resolveLinkedTopicSnapshot(
     if (!topic.linkedTopic) return undefined;
 
     const target = findLinkedTopicTarget(topic);
-    if (!target?.topic) return undefined;
+    if (!target?.topic || !context.ownerId || !target.topic.split("/").includes("{ownerId}")) return undefined;
+    if (topic.action !== MQTT_ACL_ACTIONS.SUBSCRIBE && target.topic.includes("{deviceCode}")) return undefined;
 
     const normalized = buildLinkedTopicSnapshot(topic, target);
     const resolvedTopic = resolveMqttTopicTemplate(target.topic, {
@@ -126,6 +126,7 @@ function resolveLinkedTopicSnapshot(
 }
 
 export function resolveDeviceTypeMqttTopicsForDevice(deviceCode: string): ResolvedDeviceTypeMqttTopic[] {
+    if (!getDeviceMqttState(deviceCode)?.mqtt_available) return [];
     const device = loadDeviceMqttRow(deviceCode);
     if (!device) return [];
 

@@ -2,7 +2,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { DB } from "../config/database";
 import { ROLES, Role } from "@shared/constants/auth";
-import { syncGeneratedMqttUserAclRulesForUser } from "../utils/mqttUserAcl";
+import { syncGeneratedMqttUserAclRulesForAllUsers, syncGeneratedMqttUserAclRulesForUser } from "../utils/mqttUserAcl";
 
 const INVITE_TTL_MS = 48 * 60 * 60 * 1000;
 
@@ -75,7 +75,7 @@ export class UsersController {
                 if (!Object.values(ROLES).includes(role)) {
                     return res.status(400).send({ error: "Invalid role" });
                 }
-                DB.prepare("UPDATE users SET role = ? WHERE id = ?").run(role, userId);
+                DB.prepare("UPDATE users SET role = ?, session_version = session_version + 1 WHERE id = ?").run(role, userId);
             }
 
             syncGeneratedMqttUserAclRulesForUser(userId);
@@ -131,6 +131,8 @@ export class UsersController {
                     userId
                 );
                 DB.prepare("DELETE FROM users WHERE id = ?").run(userId);
+                syncGeneratedMqttUserAclRulesForUser(userId);
+                syncGeneratedMqttUserAclRulesForAllUsers();
             })();
 
             return res.send({ ok: true });
@@ -161,7 +163,7 @@ export class UsersController {
                 ) as { id: number } | undefined;
                 if (existing) {
                     DB.prepare(
-                        "UPDATE users SET password_hash = ?, role = ?, must_change_password = 1 WHERE id = ?"
+                        "UPDATE users SET password_hash = ?, role = ?, must_change_password = 1, session_version = session_version + 1 WHERE id = ?"
                     ).run(passwordHash, selectedRole, existing.id);
                 } else {
                     DB.prepare(
@@ -180,6 +182,8 @@ export class UsersController {
                         accepted_at = NULL,
                         created_at = CURRENT_TIMESTAMP
                 `).run(normalizedEmail, selectedRole, passwordHash, invitedBy, expiresAt);
+                const invited = DB.prepare("SELECT id FROM users WHERE email = ?").get(normalizedEmail) as { id: number };
+                syncGeneratedMqttUserAclRulesForUser(invited.id);
             })();
 
             return res.status(201).send({
@@ -250,7 +254,6 @@ export class UsersController {
             if (!userId) {
                 return res.status(400).send({ error: "Invalid user id" });
             }
-            syncGeneratedMqttUserAclRulesForUser(userId);
             const rows = DB.prepare(`
                 SELECT
                     id,

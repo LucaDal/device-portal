@@ -1,22 +1,12 @@
 import { DB } from "../config/database";
 import { parseDevicePropertyMap, parseSavedPropertyMap } from "@shared/types/properties";
-import { parseDeviceTypeMqttTopics } from "@shared/types/device_type_mqtt";
 import {
     normalizeAllDeviceTypeMqttTopicLinks,
-    normalizeDeviceTypeMqttTopics,
     syncGeneratedMqttAclRulesForAllDevices,
 } from "../utils/deviceTypeMqtt";
 import { syncGeneratedMqttUserAclRulesForAllUsers } from "../utils/mqttUserAcl";
-import { validateMqttTopicTemplate } from "../utils/mqttTopicTemplate";
-
-function findDuplicate(values: string[]): string | undefined {
-    const seen = new Set<string>();
-    return values.find((value) => {
-        if (seen.has(value)) return true;
-        seen.add(value);
-        return false;
-    });
-}
+import { normalizeMqttTopics } from "../services/deviceTypeMqttConfiguration";
+import { parseMqttEnabled } from "../services/deviceMqttPolicy";
 
 export const DeviceTypeController = {
     list(req: any, res: any) {
@@ -27,7 +17,8 @@ export const DeviceTypeController = {
                 created_at,
                 deviceProperties,
                 genericProperties,
-                mqttTopics
+                mqttTopics,
+                mqtt_enabled
              FROM device_types`
         ).all();
         res.send(rows);
@@ -74,7 +65,8 @@ export const DeviceTypeController = {
                 created_at,
                 deviceProperties,
                 genericProperties,
-                mqttTopics
+                mqttTopics,
+                mqtt_enabled
              FROM device_types
              WHERE id = ?`
         ).get(id);
@@ -155,30 +147,11 @@ export const DeviceTypeController = {
         let mqttTopics = existing.mqttTopics || "[]";
         if (typeof mqttTopicsInput !== "undefined") {
             try {
-                const parsed = typeof mqttTopicsInput === "string"
-                    ? JSON.parse(mqttTopicsInput)
-                    : mqttTopicsInput;
-                const normalizedTopics = normalizeDeviceTypeMqttTopics(parseDeviceTypeMqttTopics(parsed));
-                const duplicateTopicKey = findDuplicate(normalizedTopics.map((topic) => topic.key));
-                if (duplicateTopicKey) {
-                    return res.status(400).json({
-                        error: `Duplicate MQTT topic key "${duplicateTopicKey}"`,
-                    });
-                }
-                for (const topic of normalizedTopics) {
-                    if (topic.linkedTopic) continue;
-                    const validationError = validateMqttTopicTemplate(topic.topic || "");
-                    if (validationError) {
-                        return res.status(400).json({
-                            error: `${validationError} Topic "${topic.key}" is not scoped.`,
-                        });
-                    }
-                }
-                mqttTopics = JSON.stringify(normalizedTopics);
-            } catch {
+                mqttTopics = normalizeMqttTopics(mqttTopicsInput, id);
+            } catch (error) {
                 return res
                     .status(400)
-                    .json({ error: "mqttTopics is not a valid JSON" });
+                    .json({ error: error instanceof Error ? error.message : "Invalid MQTT topics" });
             }
         }
 
@@ -222,12 +195,39 @@ export const DeviceTypeController = {
                 deviceProperties,
                 genericProperties,
                 mqttTopics,
+                mqtt_enabled,
                 created_at
                 FROM device_types
                 WHERE id = ?`
         ).get(id);
 
         return res.json(updated);
+    },
+
+    updateMqtt(req: any, res: any) {
+        const id = String(req.params.id || "");
+        const existing = DB.prepare("SELECT mqttTopics FROM device_types WHERE id = ?").get(id) as
+            { mqttTopics: string | null } | undefined;
+        if (!existing) return res.status(404).send({ error: "Device type not found" });
+        let enabled: boolean;
+        let topics: string;
+        try {
+            enabled = parseMqttEnabled(req.body?.mqtt_enabled);
+            // Revocation must not be blocked by an incomplete, unsaved topic draft.
+            topics = enabled ? normalizeMqttTopics(req.body?.mqttTopics ?? existing.mqttTopics ?? [], id)
+                : existing.mqttTopics || "[]";
+        } catch (error) {
+            return res.status(400).send({ error: error instanceof Error ? error.message : "Invalid MQTT configuration" });
+        }
+        DB.transaction(() => {
+            DB.prepare("UPDATE device_types SET mqtt_enabled = ?, mqttTopics = ? WHERE id = ?")
+                .run(enabled ? 1 : 0, topics, id);
+            normalizeAllDeviceTypeMqttTopicLinks();
+            syncGeneratedMqttAclRulesForAllDevices();
+            syncGeneratedMqttUserAclRulesForAllUsers();
+        })();
+        return res.send(DB.prepare(`SELECT id, description, firmware_version, created_at,
+            deviceProperties, genericProperties, mqttTopics, mqtt_enabled FROM device_types WHERE id = ?`).get(id));
     },
 
     // DELETE /device-types/:id

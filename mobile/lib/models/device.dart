@@ -7,6 +7,7 @@ class Device {
   final bool activated;
   final bool isShared;
   final List<DeviceProperty>? properties;
+  final bool mqttAvailable;
 
   Device({
     required this.code,
@@ -15,6 +16,7 @@ class Device {
     required this.activated,
     required this.isShared,
     this.properties,
+    this.mqttAvailable = true,
   });
 
   factory Device.fromJson(Map<String, dynamic> json) {
@@ -25,6 +27,7 @@ class Device {
       activated: (json['activated'] as int) == 1,
       isShared: (json['is_shared'] as int) == 1,
       properties: DeviceProperty.fromDeviceJson(json),
+      mqttAvailable: json['mqtt_available'] as bool? ?? true,
     );
   }
 }

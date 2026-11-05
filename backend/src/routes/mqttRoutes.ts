@@ -5,11 +5,14 @@ import { adminOnly } from "../middleware/adminOnly";
 import { basicAuthMiddleware } from "../middleware/basicAuth";
 import { deviceRequestLogger } from "../middleware/deviceRequestLogger";
 import { DEVICE_REQUEST_LOG_TYPES } from "../services/deviceRequestLogService";
+import { MqttDynsecController } from "../controllers/mqttDynsecController";
 
 const router = Router();
 
-// EMQX HTTP ACL hook
-router.post("/acl", MqttController.acl);
+router.get("/admin/dynsec", authMiddleware, adminOnly, MqttDynsecController.status);
+router.get("/admin/dynsec/:deviceCode/acl", authMiddleware, adminOnly, MqttDynsecController.deviceAcls);
+router.post("/admin/dynsec/reconcile", authMiddleware, adminOnly, MqttDynsecController.reconcile);
+router.post("/admin/dynsec/:deviceCode/rotate", authMiddleware, adminOnly, MqttDynsecController.rotate);
 
 router.get("/admin/acl/:deviceCode", authMiddleware, adminOnly, MqttController.listAclRules);
 router.get("/stream", authMiddleware, MqttController.streamMessages);

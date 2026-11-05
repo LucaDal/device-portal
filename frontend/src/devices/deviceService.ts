@@ -31,6 +31,13 @@ export async function getDevices(): Promise<DeviceWithRelations[]> {
     return apiFetchWithAuth<DeviceWithRelations[]>("/devices", {method : "GET"});
 }
 
+export async function setDeviceMqttEnabled(code: string, enabled: boolean) {
+    return apiFetchWithAuth<{ mqtt_enabled: number; mqtt_available: boolean }>(
+        `/devices/${encodeURIComponent(code)}/mqtt`,
+        { method: "PUT", body: JSON.stringify({ mqtt_enabled: enabled }) }
+    );
+}
+
 export async function getDeviceDashboardWidgets(
     code: string
 ): Promise<DeviceDashboardWidgetsResponse> {
@@ -73,7 +80,6 @@ export async function createDevice(payload: {
     owner_id?: number | null;
     owner_email?: string;
     activated?: boolean;
-    clone_from_code?: string;
 }) {
     return apiFetchWithAuth<DeviceProvisioningResult>("/devices", {
         method: "POST",
@@ -91,10 +97,10 @@ export async function updateDeviceProperties(
     });
 }
 
-export async function registerDeviceByCode(code: string) {
+export async function registerDeviceByCode(code: string, secretCode: string) {
     return apiFetchWithAuth<{ ok: boolean}>("/devices/register", {
         method: "POST",
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, secret_code: secretCode }),
     });
 }
 

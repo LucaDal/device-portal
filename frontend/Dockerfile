@@ -1,4 +1,4 @@
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 
 WORKDIR /app/frontend
 
@@ -15,7 +15,7 @@ WORKDIR /app/frontend
 # Build static assets
 RUN npm run build
 
-FROM node:20-slim
+FROM node:24-slim
 WORKDIR /app/frontend
 
 # Simple static server

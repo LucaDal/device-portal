@@ -121,6 +121,7 @@ const HomePage = () => {
     const [dashboardWidgets, setDashboardWidgets] = useState<DeviceDashboardWidgetRuntime[]>([]);
     const [switchWidgetStates, setSwitchWidgetStates] = useState<Record<string, boolean>>({});
     const [widgetInputValues, setWidgetInputValues] = useState<Record<string, string>>({});
+    const hasMqttDevices = devices.some((device) => device.mqtt_available !== false);
 
     const fetchDevices = async () => {
         if (!user) return;
@@ -141,7 +142,7 @@ const HomePage = () => {
     }, [user?.id]);
 
     useEffect(() => {
-        if (!user) {
+        if (!user || !hasMqttDevices) {
             setMqttLiveValues({});
             setMqttStreamConnected(false);
             setMqttStreamTopicCount(null);
@@ -211,7 +212,7 @@ const HomePage = () => {
             source.removeEventListener("mqtt-error", handleStreamError);
             source.close();
         };
-    }, [user?.id]);
+    }, [user?.id, hasMqttDevices]);
 
     useEffect(() => {
         if (devices.length === 0) {
@@ -229,7 +230,7 @@ const HomePage = () => {
     );
 
     useEffect(() => {
-        if (!selectedDevice) {
+        if (!selectedDevice || selectedDevice.mqtt_available === false) {
             setDashboardWidgets([]);
             setSwitchWidgetStates({});
             setWidgetInputValues({});
@@ -249,7 +250,7 @@ const HomePage = () => {
         return () => {
             cancelled = true;
         };
-    }, [selectedDevice?.code]);
+    }, [selectedDevice?.code, selectedDevice?.mqtt_available]);
 
     useEffect(() => {
         setSwitchWidgetStates((current) => {
@@ -293,10 +294,11 @@ const HomePage = () => {
                 widget.id,
                 input
             );
-            if (typeof result.state === "boolean") {
+            const state = result.state;
+            if (typeof state === "boolean") {
                 setSwitchWidgetStates((current) => ({
                     ...current,
-                    [widget.id]: result.state,
+                    [widget.id]: state,
                 }));
             }
         } catch (err: any) {
@@ -400,7 +402,7 @@ const HomePage = () => {
                                 </div>
                             </section>
 
-                            {dashboardWidgets.length > 0 ? (
+                            {selectedDevice.mqtt_available !== false && (dashboardWidgets.length > 0 ? (
                                 <section className="home-widget-grid" aria-label="MQTT dashboard widgets">
                                     {dashboardWidgets.map((widget) => {
                                         const mqttValue = widget.stateTopic
@@ -518,9 +520,9 @@ const HomePage = () => {
                             ) : (
                                 <section className="home-empty inline">
                                     <h2>No widgets configured</h2>
-                                    <p>This device type has no dashboard widgets.</p>
+                                    <p>This device has no dashboard widgets.</p>
                                 </section>
-                            )}
+                            ))}
 
                             <div className="home-board-footer">
                                 <Link className="home-device-link" to="/devices">

@@ -13,6 +13,7 @@ import {
     regenerateDeviceSecretCode,
     revokeDeviceOwnership,
     registerDeviceByCode,
+    setDeviceMqttEnabled,
 } from "../devices/deviceService";
 import { DeviceType } from "@shared/types/device_type";
 import {
@@ -61,11 +62,11 @@ const DevicesPage: React.FC = () => {
 
     const [code, setCode] = useState("");
     const [deviceTypeId, setDeviceTypeId] = useState<string | "">("");
-    const [cloneFromCode, setCloneFromCode] = useState("");
     const [ownerEmail, setOwnerEmail] = useState("");
     const [activated, setActivated] = useState(false);
     const [newDeviceSecret, setNewDeviceSecret] = useState<string | null>(null);
     const [registerCode, setRegisterCode] = useState("");
+    const [registerSecret, setRegisterSecret] = useState("");
     const [registeringDevice, setRegisteringDevice] = useState(false);
 
     const [selectedDevice, setSelectedDevice] = useState<DeviceWithRelations | null>(null);
@@ -82,6 +83,7 @@ const DevicesPage: React.FC = () => {
     const [sharingSaving, setSharingSaving] = useState(false);
     const [shareEmail, setShareEmail] = useState("");
     const [rotatingSecret, setRotatingSecret] = useState(false);
+    const [savingMqtt, setSavingMqtt] = useState(false);
 
     const [activeTab, setActiveTab] = useState<"add" | "create" | "list" | "properties">("list");
 
@@ -90,7 +92,7 @@ const DevicesPage: React.FC = () => {
     );
     const canViewDeviceProperties = isSelectedDeviceOwner;
     const canManageSharing = Boolean(selectedDevice && (isAdmin || isSelectedDeviceOwner));
-    const showSecurityPanel = canViewSecurity && (aclLoading || aclRules.length > 0);
+    const showSecurityPanel = canViewSecurity && selectedDevice?.mqtt_available !== false && (aclLoading || aclRules.length > 0);
     const canEditSelectedDevice = canViewDeviceProperties;
 
     const kpis = useMemo(() => {
@@ -154,7 +156,6 @@ const DevicesPage: React.FC = () => {
     const resetNewDeviceForm = () => {
         setCode("");
         setDeviceTypeId("");
-        setCloneFromCode("");
         setOwnerEmail("");
         setActivated(false);
     };
@@ -180,20 +181,14 @@ const DevicesPage: React.FC = () => {
         }
 
         try {
-            const selectedCloneCode = cloneFromCode;
             const created = await createDevice({
                 code: code.trim(),
                 device_type_id: deviceTypeId,
                 owner_email: ownerEmail.trim() || undefined,
                 activated,
-                clone_from_code: selectedCloneCode || undefined,
             }) as DeviceProvisioningResult;
             setNewDeviceSecret(created.secret_code);
-            setSuccessMessage(
-                selectedCloneCode
-                    ? `Device cloned from ${selectedCloneCode}. Save the new secret code now.`
-                    : "Device created successfully. Save the secret code now."
-            );
+            setSuccessMessage("Device created successfully. Save the secret code now.");
             resetNewDeviceForm();
             await fetchAll();
         } catch (err: any) {
@@ -207,15 +202,16 @@ const DevicesPage: React.FC = () => {
         setSuccessMessage(null);
 
         const trimmedCode = registerCode.trim();
-        if (!trimmedCode) {
-            setError("Enter the device code.");
+        if (!trimmedCode || !registerSecret) {
+            setError("Enter the device code and secret code.");
             return;
         }
 
         try {
             setRegisteringDevice(true);
-            await registerDeviceByCode(trimmedCode);
+            await registerDeviceByCode(trimmedCode, registerSecret);
             setRegisterCode("");
+            setRegisterSecret("");
             setSuccessMessage("Device added successfully.");
             await fetchAll();
             setActiveTab("list");
@@ -257,7 +253,7 @@ const DevicesPage: React.FC = () => {
         setGenericPropertyRows(buildGenericPropertyRows(device));
         setShareEmail("");
 
-        if (canViewSecurity) {
+        if (canViewSecurity && device.mqtt_available !== false) {
             await Promise.all([
                 loadAclForDevice(device.code),
                 loadSharesForDevice(device.code),
@@ -280,6 +276,23 @@ const DevicesPage: React.FC = () => {
         const device = devices.find((d) => d.code === code);
         if (!device) return;
         await handleOpenProperties(device);
+    };
+
+    const handleMqttEnabledChange = async (enabled: boolean) => {
+        if (!selectedDevice || !isAdmin) return;
+        setSavingMqtt(true);
+        setError(null);
+        try {
+            const result = await setDeviceMqttEnabled(selectedDevice.code, enabled);
+            const updated = { ...selectedDevice, ...result };
+            setSelectedDevice(updated);
+            setDevices((rows) => rows.map((device) => device.code === updated.code ? updated : device));
+            if (updated.mqtt_available) await loadAclForDevice(updated.code);
+            else setAclRules([]);
+            setSuccessMessage(enabled ? "MQTT enabled for this device." : "MQTT disabled for this device.");
+        } catch (failure: any) {
+            setError(failure?.error || "Could not update device MQTT access.");
+        } finally { setSavingMqtt(false); }
     };
 
     const handleDeleteDevice = async (device: DeviceWithRelations) => {
@@ -539,36 +552,10 @@ const DevicesPage: React.FC = () => {
                             </div>
 
                             <div className="dt-form-group">
-                                <label htmlFor="cloneFromDevice">Clone configuration from (optional)</label>
-                                <select
-                                    id="cloneFromDevice"
-                                    value={cloneFromCode}
-                                    onChange={(e) => {
-                                        const sourceCode = e.target.value;
-                                        setCloneFromCode(sourceCode);
-                                        const source = devices.find((device) => device.code === sourceCode);
-                                        if (source) setDeviceTypeId(source.device_type_id);
-                                    }}
-                                >
-                                    <option value="">Do not clone</option>
-                                    {devices.map((device) => (
-                                        <option key={device.code} value={device.code}>
-                                            {device.code} - {device.device_type_description || device.device_type_id}
-                                        </option>
-                                    ))}
-                                </select>
-                                <small className="dt-help-text">
-                                    Copies saved properties, including sensitive values, and dashboard widgets.
-                                    Ownership, sharing, activation and the device secret are not copied.
-                                </small>
-                            </div>
-
-                            <div className="dt-form-group">
                                 <label htmlFor="deviceType">Device type</label>
                                 <select
                                     id="deviceType"
                                     value={deviceTypeId}
-                                    disabled={Boolean(cloneFromCode)}
                                     onChange={(e) => setDeviceTypeId(e.target.value ? String(e.target.value) : "")}
                                 >
                                     <option value="">Select...</option>
@@ -620,7 +607,7 @@ const DevicesPage: React.FC = () => {
                         </div>
                         <form className="dt-form" onSubmit={handleRegisterDevice}>
                             <p className="dt-small">
-                                Enter the device code to associate it with your account.
+                                Enter the device code and secret to associate it with your account.
                             </p>
                             <div className="dt-form-group">
                                 <label htmlFor="registerDeviceCode">Code</label>
@@ -631,6 +618,12 @@ const DevicesPage: React.FC = () => {
                                     onChange={(e) => setRegisterCode(e.target.value)}
                                     placeholder="e.g. ABCD-1234-TOKEN"
                                 />
+                            </div>
+
+                            <div className="dt-form-group">
+                                <label htmlFor="registerDeviceSecret">Device secret code</label>
+                                <input id="registerDeviceSecret" type="password" autoComplete="off" required
+                                    value={registerSecret} onChange={(e) => setRegisterSecret(e.target.value)} />
                             </div>
 
                             <button
@@ -804,6 +797,14 @@ const DevicesPage: React.FC = () => {
 
                                 {renderDeviceSecretAlert()}
 
+                                {isAdmin && Boolean(selectedDevice.type_mqtt_enabled) && (
+                                    <label className="dt-checkbox">
+                                        <input type="checkbox" checked={Boolean(selectedDevice.mqtt_enabled)} disabled={savingMqtt}
+                                            onChange={(event) => void handleMqttEnabledChange(event.target.checked)} />
+                                        Use MQTT for this device
+                                    </label>
+                                )}
+
                                 <div className={showSecurityPanel ? "device-detail-grid" : "device-detail-grid single"}>
                                     <section className="dt-properties-panel dt-card-sub">
                                         <div className="device-subhead">
@@ -887,7 +888,7 @@ const DevicesPage: React.FC = () => {
                                             </button>
                                         )}
 
-                                        {canConfigureWidgetsByRole && (
+                                        {canConfigureWidgetsByRole && selectedDevice.mqtt_available !== false && (
                                             <DeviceWidgetsEditor
                                                 deviceCode={selectedDevice.code}
                                                 onError={setError}

@@ -5,8 +5,8 @@ import "../style/DeviceTypesPage.css";
 
 const EVENT_TYPES = [
     { value: "", label: "All events" },
-    { value: "ota_properties", label: "OTA properties" },
-    { value: "ota_build", label: "OTA build" },
+    { value: "device_configuration", label: "Device configuration" },
+    { value: "ota_build", label: "OTA firmware download" },
     { value: "ota_version", label: "OTA version" },
     { value: "mqtt_api_publish", label: "MQTT API publish" },
 ];
@@ -59,7 +59,7 @@ export default function RequestLogsPage() {
         <div className="device-types-page">
             <header className="dt-header">
                 <h1>Request Logs</h1>
-                <p>Review device OTA requests, property requests, and MQTT API publishes.</p>
+                <p>Review device configuration, firmware updates, and MQTT API publishes.</p>
             </header>
 
             <section className="dt-card dt-form-card request-logs-card">

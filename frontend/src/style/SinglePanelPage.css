@@ -165,3 +165,31 @@
         grid-template-columns: minmax(0, 1fr);
     }
 }
+.mqtt-settings-fields {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+}
+
+.mqtt-settings-fields.settings-stack {
+    display: grid;
+}
+
+.settings-acl-table {
+    overflow-x: auto;
+}
+
+.settings-acl-table table {
+    width: 100%;
+    text-align: left;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+
+.settings-acl-table th,
+.settings-acl-table td {
+    padding: 0.5rem;
+    border-bottom: 1px solid #334155;
+    overflow-wrap: anywhere;
+}

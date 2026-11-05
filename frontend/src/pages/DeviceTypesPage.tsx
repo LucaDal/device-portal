@@ -12,9 +12,10 @@ import {
     parseMqttTopics,
 } from "../deviceTypes/deviceTypeProperties";
 import ErrorBanner from "../components/ErrorBanner";
+import { apiFetchWithAuth } from "../api/apiClient";
 import "../style/DeviceTypesPage.css";
 
-type DeviceTypesTab = "list" | "create" | "properties";
+type DeviceTypesTab = "list" | "create" | "properties" | "mqtt";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -37,6 +38,7 @@ const DeviceTypesPage: React.FC = () => {
 
     const [propertyRows, setPropertyRows] = useState<DeviceTypePropertyEditorRow[]>([]);
     const [mqttTopics, setMqttTopics] = useState<DeviceTypeMqttTopic[]>([]);
+    const [mqttEnabled, setMqttEnabled] = useState(false);
     const [propertiesLoadedTypeId, setPropertiesLoadedTypeId] = useState("");
 
     const [submitting, setSubmitting] = useState(false);
@@ -119,11 +121,12 @@ const DeviceTypesPage: React.FC = () => {
         const formState = parseDeviceTypePropertiesForm(device);
         setPropertyRows(formState.properties);
         setMqttTopics(formState.mqttTopics);
+        setMqttEnabled(Boolean(device.mqtt_enabled));
         setPropertiesLoadedTypeId(device.id);
     };
 
     useEffect(() => {
-        if (activeTab !== "properties" || !selectedDevice) return;
+        if ((activeTab !== "properties" && activeTab !== "mqtt") || !selectedDevice) return;
         if (propertiesLoadedTypeId === selectedDevice.id) return;
 
         loadEditFields(selectedDevice);
@@ -247,7 +250,7 @@ const DeviceTypesPage: React.FC = () => {
             return;
         }
 
-        if (activeTab === "properties") {
+        if (activeTab === "properties" || activeTab === "mqtt") {
             loadEditFields(device);
             loadPropertiesFields(device);
         }
@@ -367,10 +370,10 @@ const DeviceTypesPage: React.FC = () => {
 
     const getMqttTopicsForType = (deviceTypeId: string, excludeIndex?: number): DeviceTypeMqttTopic[] => {
         if (deviceTypeId === selectedTypeId) {
-            return mqttTopics.filter((topic, index) => index !== excludeIndex && topic.key.trim());
+            return mqttTopics.filter((topic, index) => index !== excludeIndex && topic.key.trim() && !topic.linkedTopic);
         }
         const deviceType = deviceTypes.find((dt) => dt.id === deviceTypeId);
-        return deviceType ? parseMqttTopics(deviceType.mqttTopics) : [];
+        return deviceType ? parseMqttTopics(deviceType.mqttTopics).filter((topic) => !topic.linkedTopic) : [];
     };
 
     const handleMqttTopicLinkTypeChange = (index: number, deviceTypeId: string) => {
@@ -379,7 +382,6 @@ const DeviceTypesPage: React.FC = () => {
                 i === index
                     ? {
                         ...row,
-                        key: deviceTypeId ? "" : row.key,
                         label: deviceTypeId ? "" : row.label,
                         topic: deviceTypeId ? "" : row.topic,
                         linkedTopic: deviceTypeId
@@ -401,7 +403,7 @@ const DeviceTypesPage: React.FC = () => {
 
                 return {
                     ...row,
-                    key: linked?.key || row.key,
+                    key: row.key || linked?.key || "",
                     label: linked?.label || "",
                     topic: linked?.topic || row.topic || "",
                     linkedTopic: {
@@ -442,9 +444,6 @@ const DeviceTypesPage: React.FC = () => {
             const propertiesForSubmit = propertiesAreLoaded
                 ? propertyRows
                 : parseDeviceTypePropertiesForm(selectedDevice).properties;
-            const mqttTopicsForSubmit = propertiesAreLoaded
-                ? mqttTopics
-                : parseMqttTopics(selectedDevice.mqttTopics);
             const payload = buildDeviceTypePropertiesPayload(propertiesForSubmit);
 
             if (!payload.ok) {
@@ -459,7 +458,6 @@ const DeviceTypesPage: React.FC = () => {
             }
             formData.append("deviceProperties", JSON.stringify(payload.deviceProperties));
             formData.append("genericProperties", JSON.stringify(payload.genericProperties));
-            formData.append("mqttTopics", JSON.stringify(mqttTopicsForSubmit));
 
             const response = await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
             const updated = await response.json().catch(() => null) as DeviceType | null;
@@ -475,6 +473,26 @@ const DeviceTypesPage: React.FC = () => {
         } finally {
             setSubmitting(false);
         }
+    };
+
+    const handleMqttSubmit = async (event: FormEvent) => {
+        event.preventDefault();
+        if (!selectedDevice) return;
+        setError(null);
+        setSuccessMessage(null);
+        setSubmitting(true);
+        try {
+            const updated = await apiFetchWithAuth<DeviceType>(
+                "/device-types/" + encodeURIComponent(selectedDevice.id) + "/mqtt",
+                { method: "PUT", body: JSON.stringify({ mqtt_enabled: mqttEnabled, mqttTopics }) }
+            );
+            setDeviceTypes((types) => types.map((type) => type.id === updated.id ? updated : type));
+            setMqttEnabled(Boolean(updated.mqtt_enabled));
+            setMqttTopics(parseMqttTopics(updated.mqttTopics));
+            setSuccessMessage("MQTT configuration saved.");
+        } catch (failure: any) {
+            setError(failure?.error || "Could not save MQTT configuration.");
+        } finally { setSubmitting(false); }
     };
 
     return (
@@ -508,6 +526,10 @@ const DeviceTypesPage: React.FC = () => {
                     onClick={() => setActiveTab("properties")}
                 >
                     Properties
+                </button>
+                <button type="button" className={`dt-btn ${activeTab === "mqtt" ? "dt-btn-primary" : "dt-btn-outline"}`}
+                    onClick={() => setActiveTab("mqtt")}>
+                    MQTT
                 </button>
             </div>
 
@@ -910,6 +932,39 @@ const DeviceTypesPage: React.FC = () => {
 
                                 <div className="dt-divider" />
 
+                                <button
+                                    type="submit"
+                                    className="dt-btn dt-btn-primary"
+                                    disabled={submitting}
+                                >
+                                    {submitting ? "Saving..." : "Save properties"}
+                                </button>
+                            </>
+                        )}
+                    </form>
+                </section>
+            )}
+
+            {activeTab === "mqtt" && (
+                <section className="dt-card dt-form-card">
+                    <h2>Device Type MQTT access</h2>
+                    <p className="dt-small">Enable MQTT only for device types that need it. Administrators can exclude individual devices from their device details.</p>
+                    <form className="dt-form" onSubmit={handleMqttSubmit}>
+                        <div className="dt-form-group">
+                            <label htmlFor="mqtt-type-select">Device type</label>
+                            <select id="mqtt-type-select" value={selectedTypeId}
+                                onChange={(event) => handleSelectedTypeChange(event.target.value)}>
+                                <option value="">Select…</option>
+                                {deviceTypes.map((type) => <option value={type.id} key={type.id}>{type.id}</option>)}
+                            </select>
+                        </div>
+                        {selectedDevice && <>
+                            <label className="dt-checkbox" htmlFor="type-mqtt-enabled">
+                                <input id="type-mqtt-enabled" type="checkbox" checked={mqttEnabled}
+                                    onChange={(event) => setMqttEnabled(event.target.checked)} />
+                                Enable MQTT for this device type
+                            </label>
+                            <fieldset className="mqtt-settings-fields" disabled={!mqttEnabled || submitting}>
                                 <div className="dt-form-group">
                                     <div className="dt-section-heading">
                                         <h3>MQTT topics</h3>
@@ -944,7 +999,6 @@ const DeviceTypesPage: React.FC = () => {
                                                 type="text"
                                                 placeholder="relaySet"
                                                 value={topic.key}
-                                                disabled={Boolean(topic.linkedTopic)}
                                                 onChange={(e) =>
                                                     handleMqttTopicChange(index, { key: e.target.value })
                                                 }
@@ -1012,16 +1066,11 @@ const DeviceTypesPage: React.FC = () => {
                                         + Add MQTT topic
                                     </button>
                                 </div>
-
-                                <button
-                                    type="submit"
-                                    className="dt-btn dt-btn-primary"
-                                    disabled={submitting}
-                                >
-                                    {submitting ? "Saving..." : "Save properties"}
-                                </button>
-                            </>
-                        )}
+                            </fieldset>
+                            <button type="submit" className="dt-btn dt-btn-primary" disabled={submitting}>
+                                {submitting ? "Saving…" : "Save MQTT configuration"}
+                            </button>
+                        </>}
                     </form>
                 </section>
             )}

@@ -20,8 +20,8 @@ export default defineConfig(({ mode }) => ({
     fs: mode === "development" ? {
       // permette al dev server di leggere frontend + shared
       allow: [
-        path.resolve(__dirname),           // frontend root
-        path.resolve(__dirname, "../shared") // shared
+        path.resolve(import.meta.dirname),           // frontend root
+        path.resolve(import.meta.dirname, "../shared") // shared
       ]
     } : undefined,
     watch: mode === "development" ? {
@@ -31,7 +31,7 @@ export default defineConfig(({ mode }) => ({
   },
   resolve: {
     alias: {
-      "@shared": path.resolve(__dirname, "../shared") // alias per vite
+      "@shared": path.resolve(import.meta.dirname, "../shared") // alias per vite
     }
   }
 }));

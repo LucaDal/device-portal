@@ -34,21 +34,9 @@ export const buildPropertyRows = (device: DeviceWithRelations): DevicePropertyRo
             label: def.label || "",
             type: def.type,
             sensitive: Boolean(def.sensitive),
-            visible: def.visible !== false,
             notNull: def.notNull !== false,
-            mqtt: def.mqtt,
             defaultValue: def.defaultValue,
             value,
         };
     });
-};
-
-export const buildGenericPropertyRows = (device: DeviceWithRelations): DevicePropertyRow[] => {
-    const genericProps = parseDeviceProperties(device.type_genericProperties);
-    return Object.entries(genericProps).map(([key, saved]) => ({
-        key,
-        label: saved.label || "",
-        type: saved.type,
-        value: String(saved.value),
-    }));
 };

@@ -10,14 +10,13 @@ import {
     removeDeviceShare,
     revokeDeviceShareInvitation,
     getMqttAclRules,
-    regenerateDeviceSecretCode,
     revokeDeviceOwnership,
     registerDeviceByCode,
     setDeviceMqttEnabled,
 } from "../devices/deviceService";
 import { DeviceType } from "@shared/types/device_type";
 import {
-    DeviceProvisioningResult,
+    DEVICE_NAME_MAX_LENGTH,
     DeviceShareInvitationRow,
     DeviceShareRow,
     DeviceWithRelations,
@@ -26,13 +25,14 @@ import { useAuth } from "../auth/AuthContext";
 import { PropertyType, SavedProperties, castPropertyValue } from "@shared/types/properties";
 import {
     DevicePropertyRow,
-    buildGenericPropertyRows,
     buildPropertyRows,
 } from "../devices/deviceProperties";
 import { ROLES, Role } from "@shared/constants/auth";
 import { MqttAclRule } from "@shared/types/mqtt";
+import DeviceAvailability, { getDeviceAvailability } from "../devices/DeviceAvailability";
+import { useMqttStream } from "../widgets/useMqttStream";
+import MqttAclList from "../components/MqttAclList";
 import ErrorBanner from "../components/ErrorBanner";
-import DeviceWidgetsEditor from "../devices/DeviceWidgetsEditor";
 import "../style/DevicePage.css";
 
 const formatDateTime = (value?: string | null): string => {
@@ -52,7 +52,6 @@ const DevicesPage: React.FC = () => {
     const isAdmin = canCreateDevice;
     const showPropertyKey = canSeePropertyKey(user?.role);
     const canViewSecurity = isAdmin;
-    const canConfigureWidgetsByRole = user?.role === ROLES.ADMIN || user?.role === ROLES.DEV;
 
     const [deviceTypes, setDeviceTypes] = useState<DeviceType[]>([]);
     const [devices, setDevices] = useState<DeviceWithRelations[]>([]);
@@ -60,18 +59,18 @@ const DevicesPage: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-    const [code, setCode] = useState("");
+    const [deviceName, setDeviceName] = useState("");
     const [deviceTypeId, setDeviceTypeId] = useState<string | "">("");
     const [ownerEmail, setOwnerEmail] = useState("");
-    const [activated, setActivated] = useState(false);
+    const [creatingDevice, setCreatingDevice] = useState(false);
     const [newDeviceSecret, setNewDeviceSecret] = useState<string | null>(null);
     const [registerCode, setRegisterCode] = useState("");
-    const [registerSecret, setRegisterSecret] = useState("");
     const [registeringDevice, setRegisteringDevice] = useState(false);
+
+    const stream = useMqttStream(user?.id, devices.some((device) => Boolean(device.mqtt_available)));
 
     const [selectedDevice, setSelectedDevice] = useState<DeviceWithRelations | null>(null);
     const [propertyRows, setPropertyRows] = useState<DevicePropertyRow[]>([]);
-    const [genericPropertyRows, setGenericPropertyRows] = useState<DevicePropertyRow[]>([]);
     const [savingProps, setSavingProps] = useState(false);
 
     const [aclRules, setAclRules] = useState<MqttAclRule[]>([]);
@@ -82,10 +81,10 @@ const DevicesPage: React.FC = () => {
     const [sharingLoading, setSharingLoading] = useState(false);
     const [sharingSaving, setSharingSaving] = useState(false);
     const [shareEmail, setShareEmail] = useState("");
-    const [rotatingSecret, setRotatingSecret] = useState(false);
     const [savingMqtt, setSavingMqtt] = useState(false);
 
     const [activeTab, setActiveTab] = useState<"add" | "create" | "list" | "properties">("list");
+    useEffect(() => { if (activeTab !== "create") setNewDeviceSecret(null); }, [activeTab]);
 
     const isSelectedDeviceOwner = Boolean(
         selectedDevice && user && Number(selectedDevice.owner_id) === Number(user.id)
@@ -97,10 +96,10 @@ const DevicesPage: React.FC = () => {
 
     const kpis = useMemo(() => {
         const total = devices.length;
-        const active = devices.filter((d) => Boolean(d.activated)).length;
+        const active = devices.filter((device) => getDeviceAvailability({ device, entries: stream.entries, connected: stream.connected }) === "online").length;
         const owned = devices.filter((d) => !d.is_shared).length;
         return { total, active, owned, types: deviceTypes.length };
-    }, [devices, deviceTypes]);
+    }, [devices, deviceTypes, stream.entries, stream.connected]);
 
     const fetchAll = async () => {
         try {
@@ -154,10 +153,9 @@ const DevicesPage: React.FC = () => {
     };
 
     const resetNewDeviceForm = () => {
-        setCode("");
+        setDeviceName("");
         setDeviceTypeId("");
         setOwnerEmail("");
-        setActivated(false);
     };
 
     const handleCopyText = async (value: string, message: string) => {
@@ -171,29 +169,30 @@ const DevicesPage: React.FC = () => {
 
     const handleCreateDevice = async (e: FormEvent) => {
         e.preventDefault();
+        if (creatingDevice) return;
+        setNewDeviceSecret(null);
         setError(null);
         setSuccessMessage(null);
-        setNewDeviceSecret(null);
 
-        if (!code.trim() || !deviceTypeId) {
-            setError("Fill at least code and device type.");
+        if (!deviceName.trim() || !deviceTypeId) {
+            setError("Enter the device name and select its type.");
             return;
         }
 
         try {
+            setCreatingDevice(true);
             const created = await createDevice({
-                code: code.trim(),
+                name: deviceName.trim(),
                 device_type_id: deviceTypeId,
                 owner_email: ownerEmail.trim() || undefined,
-                activated,
-            }) as DeviceProvisioningResult;
+            });
             setNewDeviceSecret(created.secret_code);
-            setSuccessMessage("Device created successfully. Save the secret code now.");
+            setSuccessMessage(`Device "${created.name}" created${created.activated ? " and assigned to " + created.owner_email : ""}.`);
             resetNewDeviceForm();
             await fetchAll();
         } catch (err: any) {
             setError(err?.error || "Error while creating device.");
-        }
+        } finally { setCreatingDevice(false); }
     };
 
     const handleRegisterDevice = async (e: FormEvent) => {
@@ -202,16 +201,15 @@ const DevicesPage: React.FC = () => {
         setSuccessMessage(null);
 
         const trimmedCode = registerCode.trim();
-        if (!trimmedCode || !registerSecret) {
-            setError("Enter the device code and secret code.");
+        if (!trimmedCode) {
+            setError("Enter the device code.");
             return;
         }
 
         try {
             setRegisteringDevice(true);
-            await registerDeviceByCode(trimmedCode, registerSecret);
+            await registerDeviceByCode(trimmedCode);
             setRegisterCode("");
-            setRegisterSecret("");
             setSuccessMessage("Device added successfully.");
             await fetchAll();
             setActiveTab("list");
@@ -222,35 +220,12 @@ const DevicesPage: React.FC = () => {
         }
     };
 
-    const handleRegenerateSecretCode = async (device: DeviceWithRelations) => {
-        if (!isAdmin) return;
-        if (!window.confirm(`Regenerate secret code for device "${device.code}"? The old secret will stop working.`)) {
-            return;
-        }
-
-        try {
-            setRotatingSecret(true);
-            setError(null);
-            setSuccessMessage(null);
-            const result = await regenerateDeviceSecretCode(device.code);
-            setNewDeviceSecret(result.secret_code);
-            setSuccessMessage(`Secret code regenerated for ${device.code}. Save the new value now.`);
-            window.prompt(`New secret code for ${device.code}. Copy it now:`, result.secret_code);
-        } catch (err: any) {
-            setError(err?.error || "Error while regenerating secret code.");
-        } finally {
-            setRotatingSecret(false);
-        }
-    };
-
     const handleOpenProperties = async (device: DeviceWithRelations) => {
         setActiveTab("properties");
         setSelectedDevice(device);
         setSuccessMessage(null);
         setError(null);
-        setNewDeviceSecret(null);
         setPropertyRows(buildPropertyRows(device));
-        setGenericPropertyRows(buildGenericPropertyRows(device));
         setShareEmail("");
 
         if (canViewSecurity && device.mqtt_available !== false) {
@@ -268,7 +243,6 @@ const DevicesPage: React.FC = () => {
         if (!code) {
             setSelectedDevice(null);
             setPropertyRows([]);
-            setGenericPropertyRows([]);
             setDeviceShares([]);
             setShareInvitations([]);
             return;
@@ -308,7 +282,6 @@ const DevicesPage: React.FC = () => {
             if (selectedDevice?.code === device.code) {
                 setSelectedDevice(null);
                 setPropertyRows([]);
-                setGenericPropertyRows([]);
             }
         } catch (err: any) {
             setError(err?.error || "Error while deleting device.");
@@ -349,7 +322,6 @@ const DevicesPage: React.FC = () => {
             if (selectedDevice?.code === device.code) {
                 setSelectedDevice(null);
                 setPropertyRows([]);
-                setGenericPropertyRows([]);
             }
         } catch (err: any) {
             setError(err?.error || "Error while revoking ownership.");
@@ -453,25 +425,6 @@ const DevicesPage: React.FC = () => {
         }
     };
 
-    const renderDeviceSecretAlert = () => {
-        if (!newDeviceSecret) return null;
-
-        return (
-            <div className="dt-alert dt-alert-success">
-                <strong>Device secret code</strong>
-                <div className="device-secret-block">{newDeviceSecret}</div>
-                <p className="dt-small">Shown only now. Save it on the device firmware or provisioning flow.</p>
-                <button
-                    type="button"
-                    className="dt-btn dt-btn-outline"
-                    onClick={() => handleCopyText(newDeviceSecret, "Device secret code copied to clipboard.")}
-                >
-                    Copy secret code
-                </button>
-            </div>
-        );
-    };
-
     return (
         <div className="devices-page">
             <header className="dt-header">
@@ -485,7 +438,7 @@ const DevicesPage: React.FC = () => {
                     <strong className="device-kpi-value">{kpis.total}</strong>
                 </article>
                 <article className="device-kpi-card">
-                    <span className="device-kpi-label">Active</span>
+                    <span className="device-kpi-label">Online</span>
                     <strong className="device-kpi-value">{kpis.active}</strong>
                 </article>
                 <article className="device-kpi-card">
@@ -541,13 +494,16 @@ const DevicesPage: React.FC = () => {
                         </div>
                         <form className="dt-form" onSubmit={handleCreateDevice}>
                             <div className="dt-form-group">
-                                <label htmlFor="code">Code</label>
+                                <label htmlFor="deviceName">Name</label>
                                 <input
-                                    id="code"
+                                    id="deviceName"
+                                    disabled={creatingDevice}
                                     type="text"
-                                    value={code}
-                                    onChange={(e) => setCode(e.target.value)}
-                                    placeholder="e.g. DEV-001"
+                                    required
+                                    maxLength={DEVICE_NAME_MAX_LENGTH}
+                                    value={deviceName}
+                                    onChange={(e) => setDeviceName(e.target.value)}
+                                    placeholder="e.g. Living room sensor"
                                 />
                             </div>
 
@@ -555,6 +511,8 @@ const DevicesPage: React.FC = () => {
                                 <label htmlFor="deviceType">Device type</label>
                                 <select
                                     id="deviceType"
+                                    disabled={creatingDevice}
+                                    required
                                     value={deviceTypeId}
                                     onChange={(e) => setDeviceTypeId(e.target.value ? String(e.target.value) : "")}
                                 >
@@ -571,6 +529,7 @@ const DevicesPage: React.FC = () => {
                                 <label htmlFor="ownerEmail">Owner email (optional)</label>
                                 <input
                                     id="ownerEmail"
+                                    disabled={creatingDevice}
                                     type="email"
                                     value={ownerEmail}
                                     onChange={(e) => setOwnerEmail(e.target.value)}
@@ -578,23 +537,16 @@ const DevicesPage: React.FC = () => {
                                 />
                             </div>
 
-                            <div className="dt-form-group dt-inline">
-                                <label htmlFor="activated">
-                                    <input
-                                        id="activated"
-                                        className="dt-check"
-                                        type="checkbox"
-                                        checked={activated}
-                                        onChange={(e) => setActivated(e.target.checked)}
-                                    />{" "}
-                                    Activated
-                                </label>
-                            </div>
+                            {newDeviceSecret && <div className="dt-alert dt-alert-success">
+                                <strong>Device secret code</strong>
+                                <div className="device-secret-block">{newDeviceSecret}</div>
+                                <p className="dt-small">Shown only now. Store it on the device; users add the device using its code only.</p>
+                                <button type="button" className="dt-btn dt-btn-outline"
+                                    onClick={() => void handleCopyText(newDeviceSecret, "Device secret code copied to clipboard.")}>Copy secret code</button>
+                            </div>}
 
-                            {renderDeviceSecretAlert()}
-
-                            <button type="submit" className="dt-btn dt-btn-primary">
-                                Create device
+                            <button type="submit" className="dt-btn dt-btn-primary" disabled={creatingDevice}>
+                                {creatingDevice ? "Creating..." : "Create device"}
                             </button>
                         </form>
                     </section>
@@ -607,7 +559,7 @@ const DevicesPage: React.FC = () => {
                         </div>
                         <form className="dt-form" onSubmit={handleRegisterDevice}>
                             <p className="dt-small">
-                                Enter the device code and secret to associate it with your account.
+                                Enter the device code to associate an unassigned device with your account.
                             </p>
                             <div className="dt-form-group">
                                 <label htmlFor="registerDeviceCode">Code</label>
@@ -618,12 +570,6 @@ const DevicesPage: React.FC = () => {
                                     onChange={(e) => setRegisterCode(e.target.value)}
                                     placeholder="e.g. ABCD-1234-TOKEN"
                                 />
-                            </div>
-
-                            <div className="dt-form-group">
-                                <label htmlFor="registerDeviceSecret">Device secret code</label>
-                                <input id="registerDeviceSecret" type="password" autoComplete="off" required
-                                    value={registerSecret} onChange={(e) => setRegisterSecret(e.target.value)} />
                             </div>
 
                             <button
@@ -655,10 +601,10 @@ const DevicesPage: React.FC = () => {
                                 <table className="dt-table device-table">
                                     <thead>
                                         <tr>
-                                            <th>Code</th>
+                                            <th>Name</th>
                                             <th>Type</th>
                                             <th>Owner</th>
-                                            <th className="device-active-col">Active</th>
+                                            <th className="device-active-col">Availability</th>
                                             <th className="device-action-col">Action</th>
                                         </tr>
                                     </thead>
@@ -676,7 +622,7 @@ const DevicesPage: React.FC = () => {
                                                     }
                                                 }}
                                             >
-                                                <td>{d.code}</td>
+                                                <td>{d.name}</td>
                                                 <td>
                                                     <div className="device-type-cell">
                                                         <strong>{d.device_type_id}</strong>
@@ -687,13 +633,7 @@ const DevicesPage: React.FC = () => {
                                                 </td>
                                                 <td>{d.owner_email ?? (d.owner_id ? `#${d.owner_id}` : "-")}</td>
                                                 <td className="device-active-col">
-                                                    <span
-                                                        className={`device-active-dot ${
-                                                            d.activated ? "is-active" : "is-inactive"
-                                                        }`}
-                                                        title={d.activated ? "Active" : "Inactive"}
-                                                        aria-label={d.activated ? "Active" : "Inactive"}
-                                                    />
+                                                    <DeviceAvailability device={d} entries={stream.entries} connected={stream.connected} compact />
                                                 </td>
                                                 <td className="device-action-col">
                                                     <div className="dt-actions">
@@ -761,7 +701,7 @@ const DevicesPage: React.FC = () => {
                                     <option value="">Select...</option>
                                     {devices.map((d) => (
                                         <option key={d.code} value={d.code}>
-                                            {d.code} - {d.device_type_id}
+                                            {d.name} - {d.device_type_id}
                                         </option>
                                     ))}
                                 </select>
@@ -775,27 +715,17 @@ const DevicesPage: React.FC = () => {
                             <>
                                 <div className="device-detail-header">
                                     <h3>Device details</h3>
+                                    <DeviceAvailability device={selectedDevice} entries={stream.entries} connected={stream.connected} />
                                     <p className="dt-small">
-                                        <strong>{selectedDevice.code}</strong> (
+                                        <strong>{selectedDevice.name}</strong> (
                                         {selectedDevice.device_type_id}
                                         {selectedDevice.device_type_description
                                             ? ` - ${selectedDevice.device_type_description}`
                                             : ""}
                                         )
                                     </p>
-                                    {isAdmin && (
-                                        <button
-                                            type="button"
-                                            className="dt-btn dt-btn-outline"
-                                            disabled={rotatingSecret}
-                                            onClick={() => handleRegenerateSecretCode(selectedDevice)}
-                                        >
-                                            {rotatingSecret ? "Regenerating..." : "Regenerate secret code"}
-                                        </button>
-                                    )}
                                 </div>
 
-                                {renderDeviceSecretAlert()}
 
                                 {isAdmin && Boolean(selectedDevice.type_mqtt_enabled) && (
                                     <label className="dt-checkbox">
@@ -886,14 +816,6 @@ const DevicesPage: React.FC = () => {
                                             >
                                                 {savingProps ? "Saving..." : "Save properties"}
                                             </button>
-                                        )}
-
-                                        {canConfigureWidgetsByRole && selectedDevice.mqtt_available !== false && (
-                                            <DeviceWidgetsEditor
-                                                deviceCode={selectedDevice.code}
-                                                onError={setError}
-                                                onSaved={setSuccessMessage}
-                                            />
                                         )}
 
                                         <div className="dt-divider" />
@@ -1009,16 +931,7 @@ const DevicesPage: React.FC = () => {
                                                 {aclLoading ? (
                                                     <p className="dt-loading">Loading ACL...</p>
                                                 ) : (
-                                                    aclRules.map((rule) => (
-                                                        <div key={rule.id} className="dt-prop-row">
-                                                            <div className="dt-prop-key">
-                                                                <strong>{rule.topic_pattern}</strong>
-                                                                <span className="dt-chip">{rule.action}</span>
-                                                                <span className="dt-chip">{rule.permission}</span>
-                                                                <span className="dt-chip">Priority {rule.priority}</span>
-                                                            </div>
-                                                        </div>
-                                                    ))
+                                                    <MqttAclList rules={aclRules} onCopy={(topic) => void handleCopyText(topic, "MQTT topic copied.")} />
                                                 )}
                                             </div>
 

@@ -1,0 +1,137 @@
+.device-type-widget-editor {
+    width: 100%;
+    max-width: 1280px;
+    min-width: 0;
+}
+
+.device-widget-bindings {
+    display: grid;
+    gap: 0.65rem;
+    margin-bottom: 0.75rem;
+}
+
+.device-widget-binding {
+    display: grid;
+    gap: 1rem;
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid rgba(75, 85, 99, 0.45);
+    border-radius: 8px;
+}
+
+.device-widget-binding-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.device-widget-binding-head strong {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.device-widget-binding-head > .dt-btn {
+    flex: 0 0 auto;
+    width: 2rem;
+}
+
+.widget-editor-identity,
+.widget-editor-sections,
+.device-widget-binding .widget-scalar-field {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 1rem;
+}
+
+.widget-editor-section {
+    display: grid;
+    align-content: start;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.device-widget-binding label {
+    display: grid;
+    gap: 0.3rem;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    font-weight: 700;
+    align-content: start;
+    min-width: 0;
+}
+
+.device-widget-binding input,
+.device-widget-binding select {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.widget-editor-content {
+    border: 0;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+}
+
+.device-widget-binding fieldset {
+    min-width: 0;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    padding: 0.75rem;
+    display: grid;
+    gap: 0.6rem;
+    margin: 0;
+}
+
+.device-widget-binding legend {
+    padding: 0 0.3rem;
+}
+
+.device-widget-binding textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: #111827;
+    color: #fff;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    padding: 0.6rem;
+}
+
+.device-widget-binding .widget-feedback-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.widget-feedback-toggle input {
+    width: auto;
+}
+
+.widget-editor-heading,
+.widget-editor-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+}
+
+.widget-editor-heading h3 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+@media (max-width: 700px) {
+    .widget-editor-identity,
+    .widget-editor-sections,
+    .device-widget-binding .widget-scalar-field {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.device-widget-binding small {
+    overflow-wrap: anywhere;
+}

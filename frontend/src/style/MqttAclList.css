@@ -1,0 +1,42 @@
+.mqtt-acl-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    padding-right: 4px;
+    scrollbar-width: thin;
+    scrollbar-color: #475569 #0f172a;
+}
+
+.mqtt-acl-row {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid rgba(51, 65, 85, 0.75);
+    border-radius: 10px;
+    background: #0f172a;
+    color: #f3f4f6;
+}
+
+.mqtt-acl-main {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+    overflow-wrap: anywhere;
+}
+
+.mqtt-acl-meta { color: #94a3b8; font-size: 0.8rem; line-height: 1.4; }
+.mqtt-acl-row > button { flex: 0 0 auto; }
+
+@media (max-width: 700px) {
+    .mqtt-acl-row { flex-direction: column; }
+    .mqtt-acl-main { width: 100%; }
+}

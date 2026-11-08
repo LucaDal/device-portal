@@ -1,6 +1,7 @@
-import { apiFetch, apiFetchFD, apiFetchWithAuth } from "../api/apiClient";
+import { apiFetchFD, apiFetchWithAuth } from "../api/apiClient";
 import {
-    DeviceProvisioningResult,
+    DeviceCreationResult,
+    DeviceCreateInput,
     DeviceShareInvitationRow,
     DeviceShareRow,
     DeviceWithRelations,
@@ -9,12 +10,20 @@ import { DeviceType } from "@shared/types/device_type";
 import { MqttAclRule } from "@shared/types/mqtt";
 import { MqttPublishInput } from "@shared/types/mqtt_publish";
 import {
+    DEVICE_WIDGET_SCHEMA_VERSION,
     DeviceDashboardWidgetActionInput,
     DeviceDashboardWidget,
     DeviceDashboardWidgetsResponse,
-} from "@shared/types/device_type_mqtt";
+    DeviceTypeWidgetsResponse,
+} from "@shared/widgets";
 
 const DT_URL = "/device-types";
+
+function currentDashboard<T extends { schemaVersion: number }>(response: T): T {
+    if (response.schemaVersion !== DEVICE_WIDGET_SCHEMA_VERSION) throw new Error("Unsupported widget format. Update the API and reload the dashboard.");
+    return response;
+}
+
 
 export const getDeviceTypes = async (): Promise<DeviceType[]> => {
     return apiFetchWithAuth<DeviceType[]>(`${DT_URL}`, {
@@ -41,23 +50,27 @@ export async function setDeviceMqttEnabled(code: string, enabled: boolean) {
 export async function getDeviceDashboardWidgets(
     code: string
 ): Promise<DeviceDashboardWidgetsResponse> {
-    return apiFetchWithAuth<DeviceDashboardWidgetsResponse>(
+    return currentDashboard(await apiFetchWithAuth<DeviceDashboardWidgetsResponse>(
         `/devices/${encodeURIComponent(code)}/widgets`,
         { method: "GET" }
-    );
+    ));
 }
 
-export async function updateDeviceDashboardWidgets(
-    code: string,
-    widgets: DeviceDashboardWidget[]
-): Promise<DeviceDashboardWidgetsResponse> {
-    return apiFetchWithAuth<DeviceDashboardWidgetsResponse>(
-        `/devices/${encodeURIComponent(code)}/widgets`,
-        {
-            method: "PUT",
-            body: JSON.stringify({ widgets }),
-        }
-    );
+export async function getDeviceTypeWidgets(id: string): Promise<DeviceTypeWidgetsResponse> {
+    return currentDashboard(await apiFetchWithAuth<DeviceTypeWidgetsResponse>(
+        `${DT_URL}/${encodeURIComponent(id)}/widgets`, { method: "GET" }
+    ));
+}
+
+export async function updateDeviceTypeWidgets(
+    id: string,
+    widgets: DeviceDashboardWidget[],
+    revision: number
+): Promise<DeviceTypeWidgetsResponse> {
+    return currentDashboard(await apiFetchWithAuth<DeviceTypeWidgetsResponse>(
+        `${DT_URL}/${encodeURIComponent(id)}/widgets`,
+        { method: "PUT", body: JSON.stringify({ widgets, revision }) }
+    ));
 }
 
 export async function runDeviceDashboardWidgetAction(
@@ -65,7 +78,7 @@ export async function runDeviceDashboardWidgetAction(
     widgetId: string,
     input: DeviceDashboardWidgetActionInput = {}
 ) {
-    return apiFetchWithAuth<{ ok: boolean; widgetId: string; state?: boolean }>(
+    return apiFetchWithAuth<{ ok: boolean; widgetId: string; status: "published" }>(
         `/devices/${encodeURIComponent(code)}/widgets/${encodeURIComponent(widgetId)}/action`,
         {
             method: "POST",
@@ -74,14 +87,8 @@ export async function runDeviceDashboardWidgetAction(
     );
 }
 
-export async function createDevice(payload: {
-    code: string;
-    device_type_id: string;
-    owner_id?: number | null;
-    owner_email?: string;
-    activated?: boolean;
-}) {
-    return apiFetchWithAuth<DeviceProvisioningResult>("/devices", {
+export async function createDevice(payload: DeviceCreateInput) {
+    return apiFetchWithAuth<DeviceCreationResult>("/devices", {
         method: "POST",
         body: JSON.stringify(payload),
     });
@@ -97,10 +104,10 @@ export async function updateDeviceProperties(
     });
 }
 
-export async function registerDeviceByCode(code: string, secretCode: string) {
+export async function registerDeviceByCode(code: string) {
     return apiFetchWithAuth<{ ok: boolean}>("/devices/register", {
         method: "POST",
-        body: JSON.stringify({ code, secret_code: secretCode }),
+        body: JSON.stringify({ code }),
     });
 }
 
@@ -168,12 +175,5 @@ export async function revokeDeviceOwnership(payload: { deviceCode: string; owner
             method: "POST",
             body: JSON.stringify(payload),
         }
-    );
-}
-
-export async function regenerateDeviceSecretCode(code: string) {
-    return apiFetchWithAuth<{ ok: boolean; code: string; secret_code: string }>(
-        `/devices/${encodeURIComponent(code)}/secret-code/regenerate`,
-        { method: "POST" }
     );
 }

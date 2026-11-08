@@ -16,10 +16,17 @@ Verifiche:
 ```sh
 npx tsc --noEmit
 npm run build
+npm test
 ```
+
+Usare Node 24 per la build, come nel Dockerfile. I test web riutilizzano il runner TypeScript
+del backend: eseguire anche `npm --prefix ../backend ci` se non è già installato.
 
 Il login usa cookie HttpOnly. Le richieste passano da `src/api/apiClient.ts`.
 Settings ha le schede Password e MQTT; broker, ACL e sincronizzazione sono visibili solo agli admin.
+I widget si definiscono nella scheda **Device Types → Widgets** e sono comuni a tutti i dispositivi del tipo.
 Le azioni dei widget passano dal backend e gli aggiornamenti arrivano tramite SSE.
+
+Oggetti, validazione, componenti e stato dei widget sono descritti nella [guida ai widget](../docs/WIDGETS.md).
 
 Per deployment e permessi vedere il [README principale](../README.md).

@@ -33,10 +33,8 @@ export const parseDeviceProperties = (raw: unknown): PropertyRow[] => {
         label: def.label || "",
         type: def.type,
         sensitive: Boolean(def.sensitive),
-        visible: def.visible !== false,
         notNull: def.notNull !== false,
         defaultValue: def.defaultValue,
-        mqtt: def.mqtt,
     }));
 };
 
@@ -67,7 +65,6 @@ export const parseDeviceTypePropertiesForm = (
         ...parseGenericProperties(device.genericProperties).map((row) => ({
             ...row,
             sensitive: false,
-            visible: true,
             notNull: true,
             isGlobal: true,
         })),
@@ -114,7 +111,6 @@ export const buildDeviceTypePropertiesPayload = (
             type: row.type,
             ...(row.label?.trim() ? { label: row.label.trim() } : {}),
             sensitive: row.type === PropertyType.STRING && Boolean(row.sensitive),
-            visible: row.visible !== false,
             notNull: row.type === PropertyType.BOOL || row.notNull !== false,
         };
         if (row.type === PropertyType.BOOL) {

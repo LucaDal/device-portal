@@ -1,5 +1,3 @@
-import React from "react";
-
 const AccessDenied = () => (
   <div style={{ textAlign: "center", marginTop: "2rem" }}>
     <h2>Accesso Negato</h2>

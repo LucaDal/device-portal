@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { MqttDeviceAclView, MqttDynsecStatus, MqttUserAclRule } from "@shared/types/mqtt";
 import { apiFetchWithAuth } from "../api/apiClient";
+import MqttAclList from "./MqttAclList";
 import ErrorBanner from "./ErrorBanner";
 
 type DeviceOption = { code: string };
@@ -81,24 +82,17 @@ export default function MqttAclPanel() {
                 ...(deviceAcl.applied !== null ? [{ title: "Applied broker ACL", rows: deviceAcl.applied }] : [])].map(({ title, rows }) => (
                 <div className="settings-group" key={title}>
                     <div className="settings-group-header"><h3>{title}</h3></div>
-                    {rows.length === 0 ? <p className="dt-small">No permissions.</p> : <div className="settings-acl-table"><table>
-                        <thead><tr><th>Topic</th><th>Action</th><th>Permission</th><th>Priority</th></tr></thead>
-                        <tbody>{rows.map((acl) => <tr key={`${acl.acltype}:${acl.topic}`}>
-                            <td><code>{acl.topic}</code></td><td>{acl.acltype}</td><td>{acl.allow ? "allow" : "deny"}</td><td>{acl.priority}</td>
-                        </tr>)}</tbody>
-                    </table></div>}
+                    {rows.length === 0 ? <p className="dt-small">No permissions.</p> : <MqttAclList rules={rows.map((acl) => ({
+                        id: `${acl.acltype}:${acl.topic}`, topic_pattern: acl.topic, action: acl.acltype,
+                        permission: acl.allow ? "allow" : "deny", priority: acl.priority,
+                    }))} />}
                 </div>
             ))}
         </>}
         {subject.startsWith("user:") && !loading && <div className="settings-group">
             <div className="settings-group-header"><h3>User portal ACL</h3>
                 <p className="dt-small">Permissions used by publish actions and the realtime stream.</p></div>
-            {userAcl.length === 0 ? <p className="dt-small">No permissions.</p> : <div className="settings-acl-table"><table>
-                <thead><tr><th>Topic</th><th>Action</th><th>Permission</th><th>Device / source</th></tr></thead>
-                <tbody>{userAcl.map((acl) => <tr key={acl.id}>
-                    <td><code>{acl.topic_pattern}</code></td><td>{acl.action}</td><td>{acl.permission}</td><td>{acl.source_device_code} / {acl.source_key || acl.source}</td>
-                </tr>)}</tbody>
-            </table></div>}
+            {userAcl.length === 0 ? <p className="dt-small">No permissions.</p> : <MqttAclList rules={userAcl} />}
         </div>}
     </section>;
 }

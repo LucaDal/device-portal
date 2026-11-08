@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, FormEvent, ChangeEvent } from "react";
 import { DeviceType } from "@shared/types/device_type";
 import { PropertyType, parseSavedPropertyMap } from "@shared/types/properties";
-import { DeviceTypeMqttTopic } from "@shared/types/device_type_mqtt";
-import { MQTT_ACL_ACTIONS, MqttAclAction } from "@shared/constants/mqtt";
+import { DeviceTypeMqttTopic, getMqttTopicPlaceholderError, withDefaultDeviceTypeMqttTopics } from "@shared/types/device_type_mqtt";
+import { MQTT_AVAILABILITY_TOPIC } from "@shared/constants/mqtt";
 import { getDeviceTypes, updateDeviceType } from "../devices/deviceService";
 import { getDefaultProperties } from "../admin/adminService";
 import {
@@ -11,11 +11,14 @@ import {
     parseDeviceTypePropertiesForm,
     parseMqttTopics,
 } from "../deviceTypes/deviceTypeProperties";
+import MqttTopicInfo from "../deviceTypes/MqttTopicInfo";
+import DeviceTypeMqttTopicsEditor from "../deviceTypes/DeviceTypeMqttTopicsEditor";
+import DeviceTypeWidgetsEditor from "../deviceTypes/DeviceTypeWidgetsEditor";
 import ErrorBanner from "../components/ErrorBanner";
 import { apiFetchWithAuth } from "../api/apiClient";
 import "../style/DeviceTypesPage.css";
 
-type DeviceTypesTab = "list" | "create" | "properties" | "mqtt";
+type DeviceTypesTab = "list" | "create" | "properties" | "mqtt" | "widgets";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -32,6 +35,8 @@ const DeviceTypesPage: React.FC = () => {
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
     const [typeId, setTypeId] = useState("");
+    const [cloneFromTypeId, setCloneFromTypeId] = useState("");
+    const [createMqttEnabled, setCreateMqttEnabled] = useState(false);
     const [description, setDescription] = useState("");
     const [firmwareVersion, setFirmwareVersion] = useState("");
     const [firmwareFile, setFirmwareFile] = useState<File | null>(null);
@@ -44,10 +49,12 @@ const DeviceTypesPage: React.FC = () => {
     const [submitting, setSubmitting] = useState(false);
     const firmwareInputRef = useRef<HTMLInputElement | null>(null);
 
-    const selectedDevice = useMemo(
+    const selectedType = useMemo(
         () => deviceTypes.find((d) => d.id === selectedTypeId) || null,
         [deviceTypes, selectedTypeId]
     );
+
+    const mqttPlaceholderError = mqttTopics.map((topic) => getMqttTopicPlaceholderError(topic.topic || "")).find(Boolean);
 
     const defaultPropertiesWithStatus = useMemo(() => {
         const existingKeys = new Set(propertyRows.map((row) => row.key.trim()).filter(Boolean));
@@ -78,7 +85,6 @@ const DeviceTypesPage: React.FC = () => {
                     global: Boolean(entry.global),
                     value: String(entry.value),
                     sensitive: false,
-                    visible: true,
                     isGlobal: Boolean(entry.global),
                 }))
             );
@@ -98,6 +104,8 @@ const DeviceTypesPage: React.FC = () => {
     }, []);
 
     const resetCreateForm = () => {
+        setCloneFromTypeId("");
+        setCreateMqttEnabled(false);
         setTypeId("");
         setDescription("");
         setFirmwareVersion("");
@@ -126,12 +134,12 @@ const DeviceTypesPage: React.FC = () => {
     };
 
     useEffect(() => {
-        if ((activeTab !== "properties" && activeTab !== "mqtt") || !selectedDevice) return;
-        if (propertiesLoadedTypeId === selectedDevice.id) return;
+        if ((activeTab !== "properties" && activeTab !== "mqtt") || !selectedType) return;
+        if (propertiesLoadedTypeId === selectedType.id) return;
 
-        loadEditFields(selectedDevice);
-        loadPropertiesFields(selectedDevice);
-    }, [activeTab, selectedDevice, propertiesLoadedTypeId]);
+        loadEditFields(selectedType);
+        loadPropertiesFields(selectedType);
+    }, [activeTab, selectedType, propertiesLoadedTypeId]);
 
     const validateFirmwareVersion = (value: string): string | null => {
         const trimmed = value.trim();
@@ -172,6 +180,7 @@ const DeviceTypesPage: React.FC = () => {
 
     const handleCreateSubmit = async (e: FormEvent) => {
         e.preventDefault();
+        if (submitting) return;
         setError(null);
         setSuccessMessage(null);
 
@@ -191,7 +200,9 @@ const DeviceTypesPage: React.FC = () => {
         try {
             setSubmitting(true);
             const formData = new FormData();
-            formData.append("id", typeId);
+            formData.append("id", typeId.trim());
+            if (cloneFromTypeId) formData.append("clone_from_type_id", cloneFromTypeId);
+            else formData.append("mqtt_enabled", String(createMqttEnabled));
             formData.append("description", description);
             if (firmwareFile) {
                 formData.append("firmware_version", firmwareVersion);
@@ -264,7 +275,6 @@ const DeviceTypesPage: React.FC = () => {
                 label: "",
                 type: PropertyType.STRING,
                 sensitive: false,
-                visible: true,
                 notNull: true,
                 value: "",
                 isGlobal,
@@ -293,7 +303,6 @@ const DeviceTypesPage: React.FC = () => {
                             (patch.type || p.type) === PropertyType.STRING && !(patch.isGlobal ?? p.isGlobal)
                                 ? Boolean(patch.sensitive ?? p.sensitive)
                                 : false,
-                        visible: patch.isGlobal ?? p.isGlobal ? true : patch.visible ?? p.visible,
                     }
                     : p
             )
@@ -343,7 +352,6 @@ const DeviceTypesPage: React.FC = () => {
                 .map((row) => ({
                     ...row,
                     isGlobal: Boolean(row.global),
-                    visible: true,
                     notNull: true,
                     sensitive: false,
                 }));
@@ -353,74 +361,12 @@ const DeviceTypesPage: React.FC = () => {
         setSelectedDefaultKeys([]);
     };
 
-    const handleAddMqttTopic = () => {
-        setMqttTopics((prev) => [
-            ...prev,
-            { key: "", label: "", topic: "", action: MQTT_ACL_ACTIONS.PUBLISH },
-        ]);
-    };
-
-    const handleMqttTopicChange = (index: number, patch: Partial<DeviceTypeMqttTopic>) => {
-        setMqttTopics((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
-    };
-
-    const handleRemoveMqttTopic = (index: number) => {
-        setMqttTopics((prev) => prev.filter((_, i) => i !== index));
-    };
-
-    const getMqttTopicsForType = (deviceTypeId: string, excludeIndex?: number): DeviceTypeMqttTopic[] => {
-        if (deviceTypeId === selectedTypeId) {
-            return mqttTopics.filter((topic, index) => index !== excludeIndex && topic.key.trim() && !topic.linkedTopic);
-        }
-        const deviceType = deviceTypes.find((dt) => dt.id === deviceTypeId);
-        return deviceType ? parseMqttTopics(deviceType.mqttTopics).filter((topic) => !topic.linkedTopic) : [];
-    };
-
-    const handleMqttTopicLinkTypeChange = (index: number, deviceTypeId: string) => {
-        setMqttTopics((prev) =>
-            prev.map((row, i) =>
-                i === index
-                    ? {
-                        ...row,
-                        label: deviceTypeId ? "" : row.label,
-                        topic: deviceTypeId ? "" : row.topic,
-                        linkedTopic: deviceTypeId
-                            ? { deviceTypeId, topicKey: "" }
-                            : undefined,
-                    }
-                    : row
-            )
-        );
-    };
-
-    const handleMqttTopicLinkedTopicChange = (index: number, topicKey: string) => {
-        setMqttTopics((prev) =>
-            prev.map((row, i) => {
-                if (i !== index || !row.linkedTopic) return row;
-
-                const linked = getMqttTopicsForType(row.linkedTopic.deviceTypeId, index)
-                    .find((topic) => topic.key === topicKey);
-
-                return {
-                    ...row,
-                    key: row.key || linked?.key || "",
-                    label: linked?.label || "",
-                    topic: linked?.topic || row.topic || "",
-                    linkedTopic: {
-                        ...row.linkedTopic,
-                        topicKey,
-                    },
-                };
-            })
-        );
-    };
-
     const handlePropertiesSubmit = async (e: FormEvent) => {
         e.preventDefault();
         setError(null);
         setSuccessMessage(null);
 
-        if (!selectedDevice) {
+        if (!selectedType) {
             setError("Select a device type to update properties.");
             return;
         }
@@ -440,10 +386,10 @@ const DeviceTypesPage: React.FC = () => {
             setSubmitting(true);
 
             const formData = new FormData();
-            const propertiesAreLoaded = propertiesLoadedTypeId === selectedDevice.id;
+            const propertiesAreLoaded = propertiesLoadedTypeId === selectedType.id;
             const propertiesForSubmit = propertiesAreLoaded
                 ? propertyRows
-                : parseDeviceTypePropertiesForm(selectedDevice).properties;
+                : parseDeviceTypePropertiesForm(selectedType).properties;
             const payload = buildDeviceTypePropertiesPayload(propertiesForSubmit);
 
             if (!payload.ok) {
@@ -459,7 +405,7 @@ const DeviceTypesPage: React.FC = () => {
             formData.append("deviceProperties", JSON.stringify(payload.deviceProperties));
             formData.append("genericProperties", JSON.stringify(payload.genericProperties));
 
-            const response = await updateDeviceType(`/${selectedDevice.id}`, "PUT", formData);
+            const response = await updateDeviceType(`/${selectedType.id}`, "PUT", formData);
             const updated = await response.json().catch(() => null) as DeviceType | null;
             if (updated) {
                 loadEditFields(updated);
@@ -477,13 +423,14 @@ const DeviceTypesPage: React.FC = () => {
 
     const handleMqttSubmit = async (event: FormEvent) => {
         event.preventDefault();
-        if (!selectedDevice) return;
+        if (!selectedType) return;
+        if (mqttEnabled && mqttPlaceholderError) { setError(mqttPlaceholderError); return; }
         setError(null);
         setSuccessMessage(null);
         setSubmitting(true);
         try {
             const updated = await apiFetchWithAuth<DeviceType>(
-                "/device-types/" + encodeURIComponent(selectedDevice.id) + "/mqtt",
+                "/device-types/" + encodeURIComponent(selectedType.id) + "/mqtt",
                 { method: "PUT", body: JSON.stringify({ mqtt_enabled: mqttEnabled, mqttTopics }) }
             );
             setDeviceTypes((types) => types.map((type) => type.id === updated.id ? updated : type));
@@ -530,6 +477,10 @@ const DeviceTypesPage: React.FC = () => {
                 <button type="button" className={`dt-btn ${activeTab === "mqtt" ? "dt-btn-primary" : "dt-btn-outline"}`}
                     onClick={() => setActiveTab("mqtt")}>
                     MQTT
+                </button>
+                <button type="button" className={`dt-btn ${activeTab === "widgets" ? "dt-btn-primary" : "dt-btn-outline"}`}
+                    onClick={() => setActiveTab("widgets")}>
+                    Widgets
                 </button>
             </div>
 
@@ -606,9 +557,30 @@ const DeviceTypesPage: React.FC = () => {
                     </div>
                     <form className="dt-form" onSubmit={handleCreateSubmit}>
                         <div className="dt-form-group">
+                            <label htmlFor="clone-from-type">Clone from Device Type (optional)</label>
+                            <select id="clone-from-type" value={cloneFromTypeId} disabled={submitting} onChange={(event) => {
+                                setCloneFromTypeId(event.target.value);
+                                const source = deviceTypes.find((type) => type.id === event.target.value);
+                                setDescription(source?.description || "");
+                                setFirmwareVersion(source?.firmware_version || "");
+                                setFirmwareFile(null);
+                                if (firmwareInputRef.current) firmwareInputRef.current.value = "";
+                            }}>
+                                <option value="">Create an empty Device Type</option>
+                                {deviceTypes.map((type) => <option key={type.id} value={type.id}>{type.id} — {type.description || ""}</option>)}
+                            </select>
+                            <small className="dt-help-text">Copies properties, firmware, MQTT configuration and widgets into an independent type. Enter a new Type ID.</small>
+                        </div>
+                        {!cloneFromTypeId && <label className="dt-checkbox">
+                            <input type="checkbox" checked={createMqttEnabled} disabled={submitting} onChange={(event) => setCreateMqttEnabled(event.target.checked)} />
+                            Enable MQTT and create telemetry / commands topics
+                        </label>}
+                        <div className="dt-form-group">
                             <label htmlFor="type-id">Type ID</label>
                             <input
                                 id="type-id"
+                                required
+                                disabled={submitting}
                                 type="text"
                                 value={typeId}
                                 onChange={(e) => setTypeId(e.target.value)}
@@ -636,7 +608,7 @@ const DeviceTypesPage: React.FC = () => {
                                 placeholder="E.g. 1.0.0, 2.1.3, ..."
                             />
                             <small className="dt-help-text">
-                                Optional on creation. If no firmware file is uploaded, version will be set to 0.0.0.
+                                {cloneFromTypeId ? "Without a new file, the source firmware and version are copied." : "Optional on creation. Without a firmware file, version is 0.0.0."}
                             </small>
                         </div>
 
@@ -667,7 +639,7 @@ const DeviceTypesPage: React.FC = () => {
                             </div>
 
                             <small className="dt-help-text">
-                                Max 10MB. If omitted, an empty firmware placeholder will be created with version 0.0.0.
+                                {cloneFromTypeId ? "Max 10MB. Upload only to replace the source firmware in the new type." : "Max 10MB. If omitted, an empty firmware placeholder is created with version 0.0.0."}
                             </small>
                         </div>
 
@@ -704,7 +676,7 @@ const DeviceTypesPage: React.FC = () => {
                             </select>
                         </div>
 
-                        {!selectedDevice ? (
+                        {!selectedType ? (
                             <p className="dt-empty">Select a device type to edit properties.</p>
                         ) : (
                             <>
@@ -759,7 +731,7 @@ const DeviceTypesPage: React.FC = () => {
                                 <div className="dt-form-group">
                                     <div className="dt-section-heading">
                                         <h3>Properties</h3>
-                                        <p>Use Global for type-level values shared by all devices.</p>
+                                        <p>Global values are shared by all devices and hidden in device details. All other properties are always shown.</p>
                                     </div>
 
                                     {propertyRows.length === 0 && (
@@ -774,7 +746,6 @@ const DeviceTypesPage: React.FC = () => {
                                             <strong>Type</strong>
                                             <strong>Default value</strong>
                                             <strong>Not null</strong>
-                                            <strong>Show</strong>
                                             <strong>Encrypt</strong>
                                             <strong>Action</strong>
                                         </div>
@@ -864,21 +835,6 @@ const DeviceTypesPage: React.FC = () => {
                                                 <span className="dt-small dt-prop-inline-empty">-</span>
                                             )}
 
-                                            {!p.isGlobal ? (
-                                                <label className="dt-small dt-prop-inline-flag">
-                                                    <input
-                                                        className="dt-check"
-                                                        type="checkbox"
-                                                        checked={p.visible !== false}
-                                                        onChange={(e) =>
-                                                            handlePropertyChange(index, { visible: e.target.checked })
-                                                        }
-                                                    />
-                                                </label>
-                                            ) : (
-                                                <span className="dt-small dt-prop-inline-empty">-</span>
-                                            )}
-
                                             {!p.isGlobal && p.type === PropertyType.STRING ? (
                                                 <label className="dt-small dt-prop-inline-flag">
                                                     <input
@@ -947,8 +903,10 @@ const DeviceTypesPage: React.FC = () => {
 
             {activeTab === "mqtt" && (
                 <section className="dt-card dt-form-card">
-                    <h2>Device Type MQTT access</h2>
-                    <p className="dt-small">Enable MQTT only for device types that need it. Administrators can exclude individual devices from their device details.</p>
+                    <div className="mqtt-heading">
+                        <h2>Device Type MQTT access</h2>
+                        <MqttTopicInfo />
+                    </div>
                     <form className="dt-form" onSubmit={handleMqttSubmit}>
                         <div className="dt-form-group">
                             <label htmlFor="mqtt-type-select">Device type</label>
@@ -958,120 +916,57 @@ const DeviceTypesPage: React.FC = () => {
                                 {deviceTypes.map((type) => <option value={type.id} key={type.id}>{type.id}</option>)}
                             </select>
                         </div>
-                        {selectedDevice && <>
+                        {selectedType && <>
                             <label className="dt-checkbox" htmlFor="type-mqtt-enabled">
                                 <input id="type-mqtt-enabled" type="checkbox" checked={mqttEnabled}
-                                    onChange={(event) => setMqttEnabled(event.target.checked)} />
+                                    onChange={(event) => {
+                                        const enabled = event.target.checked;
+                                        setMqttEnabled(enabled);
+                                        if (enabled && !selectedType.mqtt_enabled) setMqttTopics((topics) => withDefaultDeviceTypeMqttTopics(topics));
+                                    }} />
                                 Enable MQTT for this device type
                             </label>
+                            <div className="dt-form-group">
+                                <h3>Built-in availability</h3>
+                                <div className="dt-table-wrapper">
+                                <table className="dt-table">
+                                    <thead><tr><th>Key</th><th>Purpose</th><th>Device publishes to</th></tr></thead>
+                                    <tbody><tr>
+                                        <td>{MQTT_AVAILABILITY_TOPIC.key}</td><td>{MQTT_AVAILABILITY_TOPIC.label}</td><td><code className="mqtt-topic-template">{MQTT_AVAILABILITY_TOPIC.topic}</code></td>
+                                    </tr></tbody>
+                                </table>
+                                </div>
+                            </div>
                             <fieldset className="mqtt-settings-fields" disabled={!mqttEnabled || submitting}>
                                 <div className="dt-form-group">
                                     <div className="dt-section-heading">
                                         <h3>MQTT topics</h3>
                                     </div>
-                                    <p className="dt-help-text">
-                                        Use placeholders to keep topics scoped: <code>{"{deviceCode}"}</code> for a
-                                        specific device, <code>{"{ownerId}"}</code> for devices owned by the same user,
-                                        and <code>{"{deviceTypeId}"}</code> for the device type.
-                                    </p>
-
-                                    {mqttTopics.length === 0 && (
-                                        <p className="dt-empty">No MQTT topics. Add one.</p>
-                                    )}
-
-                                    {mqttTopics.length > 0 && (
-                                        <div className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-mqtt dt-prop-row-header">
-                                            <strong>Key</strong>
-                                            <strong>Topic</strong>
-                                            <strong>Link type</strong>
-                                            <strong>Link topic</strong>
-                                            <strong>Action</strong>
-                                            <strong>Action</strong>
-                                        </div>
-                                    )}
-
-                                    {mqttTopics.map((topic, index) => (
-                                        <div
-                                            key={`mqtt-topic-${index}`}
-                                            className="dt-prop-row dt-prop-row-inline dt-prop-row-inline-mqtt"
-                                        >
-                                            <input
-                                                type="text"
-                                                placeholder="relaySet"
-                                                value={topic.key}
-                                                onChange={(e) =>
-                                                    handleMqttTopicChange(index, { key: e.target.value })
-                                                }
-                                            />
-                                            <input
-                                                type="text"
-                                                placeholder="devices/{deviceCode}/commands/relay"
-                                                value={topic.topic || ""}
-                                                disabled={Boolean(topic.linkedTopic)}
-                                                onChange={(e) =>
-                                                    handleMqttTopicChange(index, { topic: e.target.value })
-                                                }
-                                            />
-                                            <select
-                                                value={topic.linkedTopic?.deviceTypeId || ""}
-                                                onChange={(e) => handleMqttTopicLinkTypeChange(index, e.target.value)}
-                                            >
-                                                <option value="">No link</option>
-                                                {deviceTypes.map((dt) => (
-                                                    <option key={dt.id} value={dt.id}>
-                                                        {dt.id}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            <select
-                                                value={topic.linkedTopic?.topicKey || ""}
-                                                disabled={!topic.linkedTopic?.deviceTypeId}
-                                                onChange={(e) => handleMqttTopicLinkedTopicChange(index, e.target.value)}
-                                            >
-                                                <option value="">Select...</option>
-                                                {getMqttTopicsForType(topic.linkedTopic?.deviceTypeId || "", index)
-                                                    .map((linked) => (
-                                                        <option key={linked.key} value={linked.key}>
-                                                            {linked.key}
-                                                        </option>
-                                                    ))}
-                                            </select>
-                                            <select
-                                                value={topic.action}
-                                                onChange={(e) =>
-                                                    handleMqttTopicChange(index, {
-                                                        action: e.target.value as MqttAclAction,
-                                                    })
-                                                }
-                                            >
-                                                <option value={MQTT_ACL_ACTIONS.PUBLISH}>publish</option>
-                                                <option value={MQTT_ACL_ACTIONS.SUBSCRIBE}>subscribe</option>
-                                                <option value={MQTT_ACL_ACTIONS.ALL}>all</option>
-                                            </select>
-                                            <button
-                                                type="button"
-                                                className="dt-btn dt-btn-xs dt-btn-danger"
-                                                onClick={() => handleRemoveMqttTopic(index)}
-                                            >
-                                                ✕
-                                            </button>
-                                        </div>
-                                    ))}
-
-                                    <button
-                                        type="button"
-                                        className="dt-btn dt-btn-xs dt-btn-outline"
-                                        onClick={handleAddMqttTopic}
-                                    >
-                                        + Add MQTT topic
-                                    </button>
+                                    <DeviceTypeMqttTopicsEditor topics={mqttTopics} deviceTypes={deviceTypes}
+                                        deviceTypeId={selectedTypeId} onChange={setMqttTopics} />
                                 </div>
                             </fieldset>
-                            <button type="submit" className="dt-btn dt-btn-primary" disabled={submitting}>
+                            <button type="submit" className="dt-btn dt-btn-primary" disabled={submitting || (mqttEnabled && Boolean(mqttPlaceholderError))}>
                                 {submitting ? "Saving…" : "Save MQTT configuration"}
                             </button>
                         </>}
                     </form>
+                </section>
+            )}
+
+            {activeTab === "widgets" && (
+                <section className="dt-card dt-form-card">
+                    <h2>Device Type widgets</h2>
+                    <p>Widgets defined here apply to every device of this type, including new devices.</p>
+                    <div className="dt-form-group">
+                        <label htmlFor="widgets-type-select">Device type</label>
+                        <select id="widgets-type-select" value={selectedTypeId} onChange={(event) => handleSelectedTypeChange(event.target.value)}>
+                            <option value="">Select a device type</option>
+                            {deviceTypes.map((type) => <option key={type.id} value={type.id}>{type.id}</option>)}
+                        </select>
+                    </div>
+                    {selectedType && <DeviceTypeWidgetsEditor key={selectedType.id} deviceTypeId={selectedType.id}
+                        onError={setError} onSaved={setSuccessMessage} />}
                 </section>
             )}
 

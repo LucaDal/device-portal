@@ -3,6 +3,7 @@ import { apiFetchWithAuth } from "../api/apiClient";
 import { User } from "@shared/types/user";
 import { ROLES, ROLE_VALUES, Role } from "@shared/constants/auth";
 import { MqttUserAclRule } from "@shared/types/mqtt";
+import MqttAclList from "../components/MqttAclList";
 import ErrorBanner from "../components/ErrorBanner";
 import "../style/UserManagementPage.css";
 
@@ -341,26 +342,7 @@ export default function UsersManagementPage() {
                                 ) : aclRows.length === 0 ? (
                                     <p className="users-empty">No generated ACL rules.</p>
                                 ) : (
-                                    <div className="users-acl-list">
-                                        {aclRows.map((rule) => (
-                                            <div key={rule.id} className="users-acl-row">
-                                                <div className="users-acl-main">
-                                                    <span className="users-acl-topic">{rule.topic_pattern}</span>
-                                                    <span className="users-meta users-acl-meta">
-                                                        Action: {rule.action} | Permission: {rule.permission} | Device:{" "}
-                                                        {rule.source_device_code || "-"} | Source: {rule.source_key || rule.source}
-                                                    </span>
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    className="users-btn users-btn-secondary users-btn-copy"
-                                                    onClick={() => copyAclTopic(rule.topic_pattern)}
-                                                >
-                                                    Copy
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
+                                    <MqttAclList rules={aclRows} onCopy={copyAclTopic} />
                                 )}
                             </section>
 

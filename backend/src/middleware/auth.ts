@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
-import { DB } from "../config/database";
-import { AUTH_ERROR_CODES, Role } from "@shared/constants/auth";
+import { getUserSession } from "../repositories/userRepository";
+import { AUTH_ERROR_CODES } from "@shared/constants/auth";
 import { User } from "@shared/types/user";
 import { readAuthToken } from "../utils/authCookie";
 import { verifyToken } from "../utils/jwt";
@@ -26,11 +26,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
       return res.status(401).send({ error: "Invalid token" });
     }
 
-    const user = DB.prepare(
-      "SELECT id, email, role, must_change_password, session_version FROM users WHERE id = ?"
-    ).get(decoded.id) as
-      | { id: number; email: string; role: Role; must_change_password: number; session_version: number }
-      | undefined;
+    const user = getUserSession(decoded.id);
 
     if (!user || decoded.sessionVersion !== user.session_version) {
       return res.status(401).send({ error: "Invalid token user" });

@@ -14,28 +14,19 @@ export interface PropertyRow {
     type: PropertyType;
     global?: boolean;
     sensitive?: boolean;
-    visible?: boolean;
     notNull?: boolean;
     defaultValue?: PropertyPrimitiveValue;
-    mqtt?: DevicePropertyMqttConfig;
 }
 
 export interface DevicePropertyDefinition {
     type: PropertyType;
     label?: string;
     sensitive?: boolean;
-    visible?: boolean;
     notNull?: boolean;
     defaultValue?: PropertyPrimitiveValue;
-    mqtt?: DevicePropertyMqttConfig;
 }
 
 export type DevicePropertyMap = Record<string, DevicePropertyDefinition>;
-
-export interface DevicePropertyMqttConfig {
-    publishTopic?: string;
-    subscribeTopic?: string;
-}
 
 // Struttura salvata nel DB per ogni proprietà del *device*:
 // {
@@ -126,7 +117,6 @@ export function normalizeDevicePropertyDefinition(value: unknown): DevicePropert
         return {
             type: value,
             sensitive: false,
-            visible: true,
             notNull: true,
             ...(value === PropertyType.BOOL ? { defaultValue: false } : {}),
         };
@@ -136,10 +126,7 @@ export function normalizeDevicePropertyDefinition(value: unknown): DevicePropert
         if (!isPropertyType(rawType)) return null;
         const label = String((value as any).label || "").trim();
         const sensitive = rawType === PropertyType.STRING && Boolean((value as any).sensitive);
-        const visible = (value as any).visible !== false;
         const notNull = rawType === PropertyType.BOOL || (value as any).notNull !== false;
-        const rawMqtt = (value as any).mqtt;
-        const mqtt = normalizeDevicePropertyMqttConfig(rawMqtt);
         const hasDefaultValue = Object.prototype.hasOwnProperty.call(value, "defaultValue");
         const defaultValue = hasDefaultValue
             ? castPropertyValue(rawType, (value as any).defaultValue, "defaultValue")
@@ -151,33 +138,11 @@ export function normalizeDevicePropertyDefinition(value: unknown): DevicePropert
             type: rawType,
             ...(label ? { label } : {}),
             sensitive,
-            visible,
             notNull,
             ...(defaultValue?.ok ? { defaultValue: defaultValue.value } : {}),
-            ...(mqtt ? { mqtt } : {}),
         };
     }
     return null;
-}
-
-export function normalizeMqttTopicTemplate(value: unknown): string {
-    return String(value || "")
-        .trim()
-        .replace(/^\/+/, "")
-        .replace(/\/+$/, "");
-}
-
-export function normalizeDevicePropertyMqttConfig(raw: unknown): DevicePropertyMqttConfig | undefined {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-
-    const publishTopic = normalizeMqttTopicTemplate((raw as any).publishTopic);
-    const subscribeTopic = normalizeMqttTopicTemplate((raw as any).subscribeTopic);
-    if (!publishTopic && !subscribeTopic) return undefined;
-
-    return {
-        ...(publishTopic ? { publishTopic } : {}),
-        ...(subscribeTopic ? { subscribeTopic } : {}),
-    };
 }
 
 export function parseDevicePropertyMap(raw: unknown): DevicePropertyMap {

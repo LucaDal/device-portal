@@ -1,55 +1,58 @@
+# Documenti locali
 TO-DO.md
 FLUTTER-GUIDE.md
-# ========================
-# Node modules
-# ========================
+
+# Dipendenze e compilazione
 node_modules/
-
-# ========================
-# Build output
-# ========================
 dist/
-
-# ========================
-# Logs
-# ========================
-logs/
-*.log
-pm2*.log
-pids/
-*.pid
-*.db
-# ========================
-# Environment files
-# ========================
-.env
-.env.local
-.env.*.local
-secrets/
-
-# ========================
-# TypeScript
-# ========================
+build/
 *.tsbuildinfo
 
-# ========================
-# VSCode
-# ========================
-.vscode/
+# Cache e report dei test
+.vite/
+.cache/
+coverage/
+.nyc_output/
 
-# ========================
-# OS generated files
-# ========================
+# Log e processi locali
+logs/
+*.log
+pids/
+*.pid
+*.pid.lock
+
+# Database SQLite e dati persistenti dei container
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+/data/
+/data-*/
+/backend/data/
+
+# Configurazione locale e segreti
+.env
+.env.*
+!.env.example
+secrets/
+/.aws/
+
+# Configurazione degli editor
+.vscode/
+.idea/
+*.iml
+
+# File temporanei e del sistema operativo
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
 
-# ========================
-# Shared
-# ========================
-# di solito non serve ignorare shared se versionata
-# ma se vuoi escludere file temporanei:
-shared/*.log
-shared/*.tmp
-
-
+# JavaScript generato accanto ai sorgenti TypeScript condivisi
 /shared/**/*.js
+/shared/**/*.js.map

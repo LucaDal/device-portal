@@ -4,7 +4,7 @@ Portale per gestire dispositivi ESP, utenti, proprietà, firmware OTA e dashboar
 
 | Cartella | Contenuto |
 | --- | --- |
-| `backend/` | API Express, SQLite, autorizzazioni e MQTT |
+| `backend/` | API Express, SQLite con schema Drizzle, autorizzazioni e MQTT |
 | `frontend/` | Interfaccia React |
 | `shared/` | Tipi e regole condivise |
 | `mobile/` | Client Android Flutter in sviluppo |
@@ -91,15 +91,22 @@ location / {
 ## Uso
 
 1. Accedere come admin e invitare gli utenti; al primo accesso devono cambiare password.
-2. Creare un Device Type con proprietà, firmware ed eventuali topic MQTT.
-3. Creare il device e conservare il secret mostrato una sola volta.
-4. Per associare un device servono codice e secret. Un device assegnato non può essere acquisito da un altro utente.
-5. Il proprietario modifica le proprietà e condivide il device. Admin e sviluppatori autorizzati configurano i widget.
+2. Creare un Device Type con proprietà, firmware ed eventuali topic MQTT; definire i widget nella scheda **Widgets**.
+3. Creare il device inserendo nome e tipo: il codice viene generato automaticamente ed è copiabile dalle azioni della riga.
+   Con un'email di un utente esistente, il device viene assegnato e attivato subito; senza email resta libero e inattivo.
+   Il secret viene mostrato all'amministratore soltanto alla creazione e va caricato sul dispositivo.
+4. Per aggiungere un device libero al proprio account basta il codice. Un device assegnato non può essere acquisito da un altro utente.
+5. Il proprietario modifica le proprietà e condivide il device. Gli amministratori configurano i widget soltanto nel Device Type.
 
 Le stringhe sensibili sono cifrate. Le proprietà salvate sono leggibili da proprietario e admin;
-gli utenti condivisi usano i widget. Ogni nuovo device parte senza proprietà o widget copiati.
+gli utenti condivisi usano i widget. Le proprietà globali restano nel Device Type e non compaiono nei dettagli del device; quelle non globali sono sempre elencate, senza un flag di visibilità.
+Ogni tipo di widget ha un proprio oggetto e una validazione condivisa; vedere la [guida ai widget](docs/WIDGETS.md). Un nuovo device eredita i widget del proprio Device Type. In **Device Types → New Type → Clone from Device Type** si possono copiare proprietà, firmware, MQTT e widget indicando un nuovo Type ID; la copia è indipendente dall’originale. I singoli device non si clonano.
 
 **Settings** contiene le schede Password e MQTT. Solo l’admin vede broker, ACL e stato di sincronizzazione.
+L'unico topic integrato è `availability`. Abilitando MQTT si generano `telemetry` e `commands` nel catalogo modificabile; `state` è facoltativo e definito dall'admin.
+I widget su un topic che termina in `/#` richiedono un suffisso e mostrano il topic concreto risultante.
+Gli indicatori della dashboard e dei dispositivi usano `online`/`offline` da `availability`; sono assenti quando MQTT è disabilitato.
+Il provisioning MQTT v2 raccoglie tutti i topic in `topics`; `/device/configuration` contiene solo proprietà applicative. Aggiornare il firmware al [nuovo formato](docs/MOSQUITTO.md#firmware-esp).
 La CA MQTT è facoltativa: TLS usa le CA di sistema, una CA privata oppure la verifica disabilitata esplicitamente.
 
 ## API essenziali
@@ -111,9 +118,11 @@ Il proxy aggiunge `/api` ai percorsi. Il web usa cookie HttpOnly con sessione di
 | Operazione | Endpoint |
 | --- | --- |
 | Login / sessione / logout | `POST /auth/login`, `GET /auth/me`, `POST /auth/logout` |
-| Device accessibili | `GET /devices` |
-| Associazione device | `POST /devices/register` con `code`, `secret_code` |
+| Device accessibili, con nome e codice | `GET /devices` |
+| Creazione device admin | `POST /devices` con `name`, `device_type_id` e `owner_email` opzionale |
+| Associazione device | `POST /devices/register` con il solo `code` |
 | Proprietà | `PUT /devices/:code/properties` |
+| Configurazione widget del tipo (admin) | `GET /device-types/:id/widgets`, `PUT /device-types/:id/widgets` |
 | Widget / azione | `GET /devices/:code/widgets`, `POST /devices/:code/widgets/:widgetId/action` |
 | Aggiornamenti realtime | `GET /mqtt/stream` |
 | Configurazione device | `GET /device/configuration` con `x-device-code`, `x-device-secret` |
@@ -125,16 +134,23 @@ Il proxy aggiunge `/api` ai percorsi. Il web usa cookie HttpOnly con sessione di
 `/device` serve il dispositivo autenticato tramite i suoi header; `/devices` serve il portale con sessione utente.
 `/ota` contiene solo firmware. I vecchi percorsi non hanno alias: aggiornare gli URL nel firmware ESP.
 
+## Database
+
+Le tabelle sono definite come oggetti TypeScript in `backend/src/db/schema/`; le query sono
+centralizzate in `backend/src/repositories/`. Vincoli, indici e tipi derivano dallo schema.
+La [guida al database](docs/DATABASE.md) descrive relazioni, query, Drizzle Studio e avvio da zero.
+
+Questo schema richiede un database nuovo: non sono previste migrazioni. Per lo sviluppo usare
+un nuovo `DB_PATH`; con Compose impostare `DB_PATH_HOST` su una nuova cartella persistente.
+Un database con schema diverso viene rifiutato senza convertirne i dati.
+
 ## Sviluppo e verifiche
 
 ```sh
 cd backend
 npm ci
 npm run build
-npm run test:device-properties
-npm run test:device-routes
-npm run test:mqtt-settings
-npm run test:mqtt-dynsec
+npm test
 ```
 
 I test MQTT richiedono Mosquitto e il plugin Dynamic Security; usano porte locali e dati temporanei.
@@ -144,5 +160,5 @@ Da host impostare `DB_PATH` su un percorso scrivibile e caricare le variabili de
 Altre guide: [frontend](frontend/README.md), [mobile](mobile/README.md),
 [percorso Flutter](FLUTTER-GUIDE.md), [attività aperte](TO-DO.md).
 
-Questa versione rimuove clonazione, hook ACL EMQX e vecchi formati delle password MQTT.
+Questa versione rimuove la clonazione dei singoli device, gli hook ACL EMQX e vecchi formati delle password MQTT.
 I link MQTT devono rispettare le regole nella guida MQTT; non è prevista retrocompatibilità.

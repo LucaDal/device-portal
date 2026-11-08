@@ -2,8 +2,8 @@ import {
     DeviceDashboardError,
     buildDeviceDashboardWidgetAction,
     getDeviceDashboardWidgets,
-    saveDeviceDashboardWidgets,
 } from "../services/deviceDashboardService";
+import { getDeviceTypeWidgets, saveDeviceTypeWidgets } from "../services/deviceTypeWidgetsService";
 import { publishForAuthenticatedUser } from "./mqttController";
 
 function sendDashboardError(res: any, error: unknown) {
@@ -23,11 +23,17 @@ export const DeviceDashboardController = {
         }
     },
 
-    update(req: any, res: any) {
+    typeConfiguration(req: any, res: any) {
+        try { return res.send(getDeviceTypeWidgets(String(req.params.id || "").trim(), req.user)); }
+        catch (error) { return sendDashboardError(res, error); }
+    },
+
+    updateTypeConfiguration(req: any, res: any) {
         try {
-            const result = saveDeviceDashboardWidgets(
-                String(req.params.code || "").trim(),
+            const result = saveDeviceTypeWidgets(
+                String(req.params.id || "").trim(),
                 req.body?.widgets,
+                req.body?.revision,
                 req.user
             );
             return res.send(result);
@@ -51,7 +57,7 @@ export const DeviceDashboardController = {
             return res.send({
                 ...result.body,
                 widgetId: req.params.widgetId,
-                ...(typeof action.state === "boolean" ? { state: action.state } : {}),
+                status: "published",
             });
         } catch (error) {
             return sendDashboardError(res, error);

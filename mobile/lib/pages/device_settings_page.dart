@@ -18,7 +18,7 @@ class DeviceSettingsPage extends StatelessWidget {
       appBar: AppBar(title: const Text('Impostazioni')),
       body: Padding(
         padding: const EdgeInsets.all(24),
-        child: Text(device.code),
+        child: Text('${device.name}\n${device.code}'),
       ),
     );
   }

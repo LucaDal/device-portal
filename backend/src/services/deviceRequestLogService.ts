@@ -1,4 +1,5 @@
-import { DB } from "../config/database";
+import { insertDeviceRequestLog } from "../repositories/deviceRequestLogRepository";
+export { listDeviceRequestLogs } from "../repositories/deviceRequestLogRepository";
 
 export const DEVICE_REQUEST_LOG_TYPES = {
     DEVICE_CONFIGURATION: "device_configuration",
@@ -32,86 +33,23 @@ function toJson(value: unknown): string | null {
 
 export function recordDeviceRequestLog(input: RecordLogInput) {
     try {
-        DB.prepare(`
-            INSERT INTO device_request_logs (
-                event_type,
-                method,
-                path,
-                status_code,
-                device_code,
-                device_type_id,
-                user_id,
-                user_email,
-                topic,
-                ip,
-                user_agent,
-                request_summary,
-                response_summary,
-                error
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-            input.eventType,
-            String(input.req?.method || ""),
-            String(input.req?.originalUrl || input.req?.url || ""),
-            input.statusCode ?? null,
-            input.deviceCode || input.req?.deviceAuth?.deviceCode || null,
-            input.deviceTypeId || input.req?.deviceAuth?.deviceTypeId || null,
-            input.req?.user?.id || null,
-            input.req?.user?.email || null,
-            input.topic || null,
-            input.req?.ip || null,
-            String(input.req?.headers?.["user-agent"] || ""),
-            toJson(input.requestSummary),
-            toJson(input.responseSummary),
-            input.error || null
-        );
+        insertDeviceRequestLog({
+            event_type: input.eventType,
+            method: String(input.req?.method || ""),
+            path: String(input.req?.originalUrl || input.req?.url || ""),
+            status_code: input.statusCode ?? null,
+            device_code: input.deviceCode || input.req?.deviceAuth?.deviceCode || null,
+            device_type_id: input.deviceTypeId || input.req?.deviceAuth?.deviceTypeId || null,
+            user_id: input.req?.user?.id || null,
+            user_email: input.req?.user?.email || null,
+            topic: input.topic || null,
+            ip: input.req?.ip || null,
+            user_agent: String(input.req?.headers?.["user-agent"] || ""),
+            request_summary: toJson(input.requestSummary),
+            response_summary: toJson(input.responseSummary),
+            error: input.error || null,
+        });
     } catch (err) {
         console.error("Failed to record device request log", err);
     }
-}
-
-export function listDeviceRequestLogs(filters: {
-    eventType?: string;
-    deviceCode?: string;
-    limit?: number;
-}) {
-    const where: string[] = [];
-    const params: unknown[] = [];
-
-    if (filters.eventType) {
-        where.push("event_type = ?");
-        params.push(filters.eventType);
-    }
-    if (filters.deviceCode) {
-        where.push("device_code = ?");
-        params.push(filters.deviceCode);
-    }
-
-    const limit = Math.min(Math.max(Number(filters.limit) || 100, 1), 500);
-    params.push(limit);
-
-    return DB.prepare(`
-        SELECT
-            id,
-            created_at,
-            event_type,
-            method,
-            path,
-            status_code,
-            device_code,
-            device_type_id,
-            user_id,
-            user_email,
-            topic,
-            ip,
-            user_agent,
-            request_summary,
-            response_summary,
-            error
-        FROM device_request_logs
-        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-        ORDER BY datetime(created_at) DESC, id DESC
-        LIMIT ?
-    `).all(...params);
 }

@@ -7,7 +7,7 @@ import deviceTypeRoutes from "./routes/deviceTypeRoutes";
 import managementRoutes from "./routes/managementRoute";
 import otaRoutes from "./routes/otaRoutes";
 import mqttRoutes from "./routes/mqttRoutes";
-import "./config/database"; // inizializza DB
+import { ensureAdminUser } from "./config/bootstrap";
 import { User } from "@shared/types/user";
 import { securityHeadersMiddleware } from "./middleware/securityHeaders";
 import { sensitiveIpRateLimitMiddleware } from "./middleware/rateLimit";
@@ -27,6 +27,8 @@ declare global {
     }
   }
 }
+
+ensureAdminUser();
 
 const app = express();
 app.set("trust proxy", 1);

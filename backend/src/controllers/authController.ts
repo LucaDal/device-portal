@@ -1,11 +1,13 @@
-import { DB } from "../config/database";
+import { findUserByEmail, findUserById, getUserSession, hasValidUserInvitation, changeUserPassword } from "../repositories/userRepository";
+import { acceptDeviceShareInvitations } from "../repositories/deviceShareRepository";
+import { normalizeEmail } from "../utils/email";
 import bcrypt from "bcrypt";
 import { generateToken } from "../utils/jwt";
 import { UserWithPassword } from "@shared/types/user";
 import { clearAuthCookie, setAuthCookie } from "../utils/authCookie";
 import { syncGeneratedMqttUserAclRulesForUser } from "../utils/mqttUserAcl";
 
-function toPublicUser(row: UserWithPassword) {
+function toPublicUser(row: Pick<UserWithPassword, "id" | "email" | "role" | "must_change_password" | "created_at">) {
     return {
         id: row.id,
         email: row.email,
@@ -22,10 +24,8 @@ export const AuthController = {
         if (typeof email !== "string" || typeof password !== "string" || !email.trim() || !password) {
             return res.status(400).send({ error: "Email and password are required" });
         }
-        const normalizedEmail = String(email).trim().toLowerCase();
-        const row = DB.prepare("SELECT * FROM users WHERE email = ?").get(
-            normalizedEmail
-        ) as UserWithPassword | undefined;
+        const normalizedEmail = normalizeEmail(email);
+        const row = findUserByEmail(normalizedEmail);
 
         if (!row?.password_hash) return res.status(401).send({ error: "Invalid" });
 
@@ -33,13 +33,7 @@ export const AuthController = {
         if (!ok) return res.status(401).send({ error: "invalid" });
 
         if (row.must_change_password) {
-            const pendingInvitation = DB.prepare(`
-                SELECT id FROM user_invitations
-                WHERE email = ?
-                  AND accepted_at IS NULL
-                  AND datetime(expires_at) > datetime('now')
-                LIMIT 1
-            `).get(normalizedEmail);
+            const pendingInvitation = hasValidUserInvitation(normalizedEmail);
 
             if (!pendingInvitation) {
                 return res.status(403).send({
@@ -48,38 +42,7 @@ export const AuthController = {
             }
         }
 
-        DB.transaction(() => {
-            const pendingDeviceInvitations = DB.prepare(`
-                SELECT id, device_code
-                FROM device_share_invitations
-                WHERE email = ?
-                  AND accepted_at IS NULL
-                  AND datetime(expires_at) > datetime('now')
-            `).all(normalizedEmail) as Array<{
-                id: number;
-                device_code: string;
-            }>;
-
-            for (const invite of pendingDeviceInvitations) {
-                DB.prepare(`
-                    INSERT INTO device_shares (device_code, user_id, shared_by)
-                    SELECT ?, ?, invited_by
-                    FROM device_share_invitations
-                    WHERE id = ?
-                    ON CONFLICT(device_code, user_id) DO UPDATE SET
-                        shared_by = excluded.shared_by,
-                        created_at = CURRENT_TIMESTAMP
-                `).run(invite.device_code, row.id, invite.id);
-            }
-
-            DB.prepare(`
-                UPDATE device_share_invitations
-                SET accepted_at = CURRENT_TIMESTAMP
-                WHERE email = ?
-                  AND accepted_at IS NULL
-                  AND datetime(expires_at) > datetime('now')
-            `).run(normalizedEmail);
-        })();
+        acceptDeviceShareInvitations(normalizedEmail, row.id);
         syncGeneratedMqttUserAclRulesForUser(row.id);
 
         setAuthCookie(req, res, generateToken(row));
@@ -104,9 +67,7 @@ export const AuthController = {
                 });
             }
 
-            const row = DB.prepare(
-                "SELECT id, email, password_hash, session_version FROM users WHERE id = ?"
-            ).get(userId) as UserWithPassword | undefined;
+            const row = findUserById(userId);
             if (!row) {
                 return res.status(404).send({ error: "User not found" });
             }
@@ -117,12 +78,7 @@ export const AuthController = {
             }
 
             const nextHash = await bcrypt.hash(newPassword, 12);
-            DB.prepare(
-                "UPDATE users SET password_hash = ?, must_change_password = 0, session_version = session_version + 1 WHERE id = ?"
-            ).run(nextHash, userId);
-            DB.prepare(
-                "UPDATE user_invitations SET accepted_at = COALESCE(accepted_at, CURRENT_TIMESTAMP) WHERE email = ?"
-            ).run(row.email);
+            changeUserPassword(userId, row.email, nextHash);
 
             setAuthCookie(req, res, generateToken({ ...row, session_version: (row.session_version ?? 0) + 1 }));
             return res.send({ ok: true });
@@ -138,9 +94,7 @@ export const AuthController = {
             return res.status(401).send({ error: "Missing token" });
         }
 
-        const row = DB.prepare(
-            "SELECT id, email, role, must_change_password, created_at FROM users WHERE id = ?"
-        ).get(userId) as UserWithPassword | undefined;
+        const row = getUserSession(userId);
 
         if (!row) {
             return res.status(401).send({ error: "Invalid token user" });

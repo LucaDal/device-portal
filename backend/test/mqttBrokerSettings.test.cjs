@@ -17,6 +17,7 @@ process.env.MQTT_DYNSEC_ENABLED = 'false';
 require('ts-node').register({ project: path.join(__dirname, '../tsconfig.json'), transpileOnly: true, preferTsExts: true });
 require('tsconfig-paths').register({ baseUrl: path.join(__dirname, '..'), paths: { '@shared/*': ['../shared/*'] } });
 const { DB } = require('../src/config/database.ts');
+require('../src/config/bootstrap.ts').ensureAdminUser();
 const { SettingsController } = require('../src/controllers/settingsController.ts');
 const { brokerSettingsView, loadBrokerSettings, saveBrokerSettings } = require('../src/utils/mqttBrokerSettings.ts');
 const input = { host: 'localhost', port: 8883, protocol: 'mqtts', username: 'portal' };

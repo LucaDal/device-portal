@@ -23,7 +23,10 @@ process.env.MQTT_PUBLIC_HOST = 'mqtt.example.test';
 require('ts-node').register({ project: path.join(__dirname, '../tsconfig.json'), transpileOnly: true, preferTsExts: true });
 require('tsconfig-paths').register({ baseUrl: path.join(__dirname, '..'), paths: { '@shared/*': ['../shared/*'] } });
 const { connectAsync } = require('mqtt');
+const { DEFAULT_DEVICE_TYPE_MQTT_TOPICS } = require('../../shared/constants/mqtt');
 const { DB } = require('../src/config/database.ts');
+const { createUser } = require('../src/services/userService.ts');
+require('../src/config/bootstrap.ts').ensureAdminUser();
 const { getMqttDevicePassword, mqttDeviceUsername, mqttDeviceRole } = require('../src/services/mqttDeviceCredentials.ts');
 const { MqttDynsecClient } = require('../src/services/mqttDynsecClient.ts');
 const { MqttDynsecService, buildDynsecAcls } = require('../src/services/mqttDynsecService.ts');
@@ -34,17 +37,18 @@ const { requireDeviceCodeSecret } = require('../src/middleware/deviceAuth.ts');
 const { DeviceTypeController } = require('../src/controllers/deviceTypeController.ts');
 const { DeviceController } = require('../src/controllers/deviceController.ts');
 const { getDeviceDashboardWidgets, buildDeviceDashboardWidgetAction } = require('../src/services/deviceDashboardService.ts');
-const { mapDeviceTypeMqttTopicsToProperties, syncGeneratedMqttAclRulesForDevice, resolveDeviceTypeMqttTopicsForDevice } = require('../src/utils/deviceTypeMqtt.ts');
+const { getDeviceMqttTopicMap, syncGeneratedMqttAclRulesForDevice, resolveDeviceTypeMqttTopicsForDevice } = require('../src/utils/deviceTypeMqtt.ts');
 const { brokerSettingsView, loadBrokerSettings, saveBrokerSettings, brokerClientOptions } = require('../src/utils/mqttBrokerSettings.ts');
 const { generateToken } = require('../src/utils/jwt.ts');
 const express = require('express');
 
 let broker, control, service, url, api, apiUrl;
 const clients = [];
-const owner = Number(DB.prepare("INSERT INTO users(email, role) VALUES ('device-owner@example.test', 'user')").run().lastInsertRowid);
-DB.prepare("INSERT INTO device_types(id, firmware_version, firmware_build, mqtt_enabled) VALUES ('test', '1', ?, 1)").run(Buffer.alloc(0));
+const owner = Number(DB.prepare("INSERT INTO users(email, role, password_hash) VALUES ('device-owner@example.test', 'user', 'fixture-hash')").run().lastInsertRowid);
+DB.prepare("INSERT INTO device_types(id, firmware_version, firmware_build, mqtt_enabled, mqttTopics) VALUES ('test', '1', ?, 1, ?)").run(Buffer.alloc(0), JSON.stringify(DEFAULT_DEVICE_TYPE_MQTT_TOPICS));
 for (const code of ['A', 'B']) {
-  DB.prepare("INSERT INTO devices(code, device_type_id, owner_id, activated, device_secret_hash) VALUES (?, 'test', ?, 1, 'test')").run(code, owner);
+  DB.prepare("INSERT INTO devices (name, code, device_type_id, owner_id, activated, device_secret_hash) VALUES ('Fixture device', ?, 'test', ?, 1, 'test')").run(code, owner);
+  syncGeneratedMqttAclRulesForDevice(code);
 }
 
 function response() {
@@ -161,7 +165,7 @@ test('queue changes roll back with device transactions and retain deletion tombs
     throw new Error('rollback');
   })());
   assert.deepEqual(DB.prepare("SELECT * FROM mqtt_dynsec_queue WHERE device_code = 'A'").get(), before);
-  DB.prepare("INSERT INTO devices(code, device_type_id, device_secret_hash) VALUES ('DELETED', 'test', 'x')").run();
+  DB.prepare("INSERT INTO devices (name, code, device_type_id, device_secret_hash) VALUES ('Fixture device', 'DELETED', 'test', 'x')").run();
   DB.prepare("DELETE FROM devices WHERE code = 'DELETED'").run();
   assert.ok(DB.prepare("SELECT 1 FROM mqtt_dynsec_queue WHERE device_code = 'DELETED'").get());
   await service.drain();
@@ -172,6 +176,7 @@ test('ACL conversion preserves denies and blocks system and control topics', () 
   const acls = buildDynsecAcls('A', [
     { action: 'publish', topic_pattern: 'devices/A/telemetry/private', permission: 'deny', priority: 1 },
     { action: 'publish', topic_pattern: 'devices/A/telemetry/private', permission: 'allow', priority: 50 },
+    { action: 'publish', topic_pattern: 'devices/A/telemetry/#', permission: 'allow', priority: 100 },
   ]);
   const deny = acls.find((acl) => acl.topic === 'devices/A/telemetry/private');
   const allow = acls.find((acl) => acl.topic === 'devices/A/telemetry/#');
@@ -179,6 +184,7 @@ test('ACL conversion preserves denies and blocks system and control topics', () 
   assert.ok(deny.priority > allow.priority);
   assert.ok(acls.some((acl) => acl.topic === '$CONTROL/#' && !acl.allow));
   assert.throws(() => buildDynsecAcls('A/#', []));
+  assert.equal(buildDynsecAcls('A', []).some((acl) => acl.allow && acl.topic.startsWith('devices/')), false);
 });
 
 test('real broker permits own topics, rejects other devices and delivers retained state', async () => {
@@ -205,6 +211,29 @@ test('real broker permits own topics, rejects other devices and delivers retaine
   await service.syncDevice('A');
   await device.publishAsync('devices/A/telemetry/state', '{}', { qos: 1 });
   assert.equal(device.connected, true, 'An unchanged reconciliation must preserve the connection');
+});
+
+test('availability publishes online and a retained offline Last Will on connection loss', { timeout: 5000 }, async () => {
+  const observer = clients.find((client) => client.options.clientId === 'test-data-client');
+  const topic = 'devices/B/telemetry/availability';
+  await observer.subscribeAsync(topic, { qos: 1 });
+  const device = await connectAsync(url, { username: mqttDeviceUsername('B'), password: getMqttDevicePassword('B'),
+    clientId: 'B', reconnectPeriod: 0, will: { topic, payload: Buffer.from('offline'), qos: 1, retain: true } });
+  clients.push(device);
+  const online = once(observer, 'message');
+  await device.publishAsync(topic, 'online', { qos: 1, retain: true });
+  assert.equal((await online)[1].toString(), 'online');
+  const offline = once(observer, 'message');
+  await device.endAsync(true);
+  assert.equal((await offline)[1].toString(), 'offline');
+  await observer.unsubscribeAsync(topic);
+  const retained = once(observer, 'message');
+  await observer.subscribeAsync(topic, { qos: 1 });
+  const [receivedTopic, payload, packet] = await retained;
+  assert.equal(receivedTopic, topic);
+  assert.equal(payload.toString(), 'offline');
+  assert.equal(packet.retain, true);
+  await observer.unsubscribeAsync(topic);
 });
 
 test('rotation replaces credentials and revocation disconnects an already connected ESP', async () => {
@@ -266,7 +295,7 @@ test('reconciliation removes orphan clients restored from an older broker backup
 });
 
 test('user SSE permissions include only availability and state of accessible devices', () => {
-  const unrelated = Number(DB.prepare("INSERT INTO users(email, role) VALUES ('unrelated@example.test', 'user')").run().lastInsertRowid);
+  const unrelated = Number(DB.prepare("INSERT INTO users(email, role, password_hash) VALUES ('unrelated@example.test', 'user', 'fixture-hash')").run().lastInsertRowid);
   syncGeneratedMqttUserAclRulesForUser(owner);
   syncGeneratedMqttUserAclRulesForUser(unrelated);
   assert.equal(canUserAccessMqttTopic(owner, 'subscribe', 'devices/A/telemetry/availability'), true);
@@ -303,12 +332,13 @@ test('MQTT settings and toggles require admin authorization on the actual HTTP r
 test('MQTT opt-out removes credentials, actions, OTA topics and user subscriptions', async () => {
   const admin = DB.prepare('SELECT * FROM users WHERE email = ?').get(process.env.ADMIN_EMAIL);
   const user = { id: owner, role: 'user' };
-  const topics = [{ key: 'relayCommand', topic: 'devices/{deviceCode}/commands/relay', action: 'subscribe' }];
+  const topics = [...DEFAULT_DEVICE_TYPE_MQTT_TOPICS, { key: 'relayCommand', topic: 'devices/{deviceCode}/commands/#', action: 'subscribe' }];
   let res = response();
   DeviceTypeController.updateMqtt({ params: { id: 'test' }, body: { mqtt_enabled: true, mqttTopics: topics } }, res);
   assert.equal(res.code, 200);
-  DB.prepare(`INSERT INTO device_widgets(device_code, widget_id, label, kind, topic_key, on_value, off_value)
-    VALUES ('A', 'relay', 'Relay', 'switch', 'relayCommand', 'true', 'false')`).run();
+  require('../src/repositories/deviceTypeWidgetRepository.ts').replaceDeviceTypeWidgets('test', [{
+    id: 'relay', label: 'Relay', kind: 'switch', command: { topicKey: 'relayCommand', topicSuffix: 'relay', onValue: true, offValue: false },
+  }], DB.prepare("SELECT widgets_revision FROM device_types WHERE id = 'test'").get().widgets_revision);
   assert.equal(getDeviceDashboardWidgets('A', user).widgets.length, 1);
   const oldPassword = getMqttDevicePassword('A');
 
@@ -317,7 +347,7 @@ test('MQTT opt-out removes credentials, actions, OTA topics and user subscriptio
   assert.equal(res.code, 200);
   assert.equal(getDeviceDashboardWidgets('A', user).widgets.length, 0);
   assert.throws(() => buildDeviceDashboardWidgetAction('A', 'relay', { state: true }, user), (error) => error.status === 409);
-  assert.deepEqual(mapDeviceTypeMqttTopicsToProperties('A'), {});
+  assert.deepEqual(getDeviceMqttTopicMap('A'), {});
   assert.equal(canUserAccessMqttTopic(owner, 'subscribe', 'devices/A/telemetry/state'), false);
   const list = response();
   DeviceController.list({ user: admin }, list);
@@ -341,7 +371,7 @@ test('MQTT opt-out removes credentials, actions, OTA topics and user subscriptio
 
 test('new types default to MQTT off and cannot be overridden by a single device', () => {
   DB.prepare("INSERT INTO device_types(id, firmware_version, firmware_build) VALUES ('no-mqtt', '1', ?)").run(Buffer.alloc(0));
-  DB.prepare("INSERT INTO devices(code, device_type_id, owner_id, activated, device_secret_hash) VALUES ('NO-MQTT', 'no-mqtt', ?, 1, 'x')").run(owner);
+  DB.prepare("INSERT INTO devices (name, code, device_type_id, owner_id, activated, device_secret_hash) VALUES ('Fixture device', 'NO-MQTT', 'no-mqtt', ?, 1, 'x')").run(owner);
   const res = response();
   DeviceController.updateMqtt({ params: { code: 'NO-MQTT' }, body: { mqtt_enabled: true } }, res);
   assert.equal(res.code, 409);
@@ -400,16 +430,22 @@ test('TLS uses the system trust store by default and accepts explicit insecure m
   } finally { process.env.MQTT_DYNSEC_ENABLED = 'true'; }
 });
 
-test('new devices start with empty properties and widgets even if obsolete cloning fields are supplied', () => {
+test('new devices generate their code and inherit type widgets without copying properties', () => {
   const res = response();
-  DeviceController.create({ body: { code: 'FRESH', device_type_id: 'test', clone_from_code: 'A' } }, res);
+  DeviceController.create({ body: { name: 'Fresh device', code: 'FRESH', device_type_id: 'test', activated: true, owner_id: owner } }, res);
   assert.equal(res.code, 201);
+  assert.equal(res.body.name, 'Fresh device');
+  assert.match(res.body.code, /^[a-f0-9-]{36}$/);
+  assert.notEqual(res.body.code, 'FRESH');
+  assert.equal(res.body.activated, 0);
+  assert.equal(res.body.owner_id, null);
   assert.equal(res.body.cloned_from_code, undefined);
-  assert.equal(DB.prepare("SELECT properties FROM device_properties WHERE device_code = 'FRESH'").get().properties, '{}');
-  assert.equal(DB.prepare("SELECT 1 FROM device_widgets WHERE device_code = 'FRESH'").get(), undefined);
-  for (const code of ['A/+', 'A/#', 'A\0B']) {
+  assert.equal(DB.prepare('SELECT properties FROM device_properties WHERE device_code = ?').get(res.body.code).properties, '{}');
+  const widgets = require('../src/repositories/deviceTypeWidgetRepository.ts');
+  assert.deepEqual(widgets.loadDeviceWidgets(res.body.code), widgets.loadDeviceTypeWidgets('test'));
+  for (const name of ['', '   ', 'x'.repeat(129)]) {
     const invalid = response();
-    DeviceController.create({ body: { code, device_type_id: 'test' } }, invalid);
+    DeviceController.create({ body: { name, device_type_id: 'test' } }, invalid);
     assert.equal(invalid.code, 400);
   }
 });
@@ -418,23 +454,23 @@ test('linked topics preserve local widget keys, isolate owners, and reject inval
   const { normalizeMqttTopics } = require('../src/services/deviceTypeMqttConfiguration.ts');
   const { syncGeneratedMqttAclRulesForAllDevices } = require('../src/utils/deviceTypeMqtt.ts');
   const { normalizeAllDeviceTypeMqttTopicLinks } = require('../src/utils/deviceTypeMqtt.ts');
-  const otherOwner = Number(DB.prepare("INSERT INTO users(email, role) VALUES ('linked-other@example.test', 'user')").run().lastInsertRowid);
+  const otherOwner = Number(DB.prepare("INSERT INTO users(email, role, password_hash) VALUES ('linked-other@example.test', 'user', 'fixture-hash')").run().lastInsertRowid);
   const targetTopics = [
-    { key: 'state', topic: 'owners/{ownerId}/{deviceTypeId}/{deviceCode}/state', action: 'publish' },
+    { key: 'reported_state', topic: 'owners/{ownerId}/{deviceTypeId}/{deviceCode}/state', action: 'publish' },
     { key: 'command', topic: 'owners/{ownerId}/{deviceTypeId}/command', action: 'subscribe' },
     { key: 'unscoped', topic: 'devices/{deviceCode}/state', action: 'publish' },
   ];
   DB.prepare("INSERT INTO device_types(id, firmware_version, firmware_build, mqtt_enabled, mqttTopics) VALUES ('link-target', '1', ?, 1, ?)")
     .run(Buffer.alloc(0), JSON.stringify(targetTopics));
   const links = [
-    { key: 'monitor', linkedTopic: { deviceTypeId: 'link-target', topicKey: 'state' }, action: 'subscribe' },
+    { key: 'monitor', linkedTopic: { deviceTypeId: 'link-target', topicKey: 'reported_state' }, action: 'subscribe' },
     { key: 'control', linkedTopic: { deviceTypeId: 'link-target', topicKey: 'command' }, action: 'publish' },
   ];
   const normalized = normalizeMqttTopics(links, 'link-source');
   assert.equal(JSON.parse(normalized)[0].key, 'monitor');
   DB.prepare("INSERT INTO device_types(id, firmware_version, firmware_build, mqtt_enabled, mqttTopics) VALUES ('link-source', '1', ?, 1, ?)")
     .run(Buffer.alloc(0), normalized);
-  const insert = DB.prepare('INSERT INTO devices(code, device_type_id, owner_id, activated, device_secret_hash) VALUES (?, ?, ?, 1, ?)');
+  const insert = DB.prepare(`INSERT INTO devices (name, code, device_type_id, owner_id, activated, device_secret_hash) VALUES ('Fixture device', ?, ?, ?, 1, ?)`);
   insert.run('LINK-SOURCE', 'link-source', owner, 'x');
   insert.run('LINK-OWN', 'link-target', owner, 'x');
   insert.run('LINK-OTHER', 'link-target', otherOwner, 'x');
@@ -449,8 +485,8 @@ test('linked topics preserve local widget keys, isolate owners, and reject inval
   const broken = (topicKey, action = 'subscribe') => [{ key: 'local', linkedTopic: { deviceTypeId: 'link-target', topicKey }, action }];
   assert.throws(() => normalizeMqttTopics(broken('missing'), 'link-source'), /existing direct topic/);
   assert.throws(() => normalizeMqttTopics(broken('unscoped'), 'link-source'), /ownerId/);
-  assert.throws(() => normalizeMqttTopics(broken('state', 'publish'), 'link-source'), /wildcards/);
-  assert.throws(() => normalizeMqttTopics([{ key: 'x', topic: 'owners/{ownerId}/#', action: 'publish' }], 'test'), /wildcards/);
+  assert.throws(() => normalizeMqttTopics(broken('reported_state', 'publish'), 'link-source'), /wildcard/);
+  assert.throws(() => normalizeMqttTopics([{ key: 'x', topic: 'owners/{ownerId}/#/bad', action: 'publish' }], 'test'), /wildcard/);
   assert.throws(() => normalizeMqttTopics([{ key: 'x', topic: 'devices/prefix{deviceCode}', action: 'publish' }], 'test'), /full/);
   assert.throws(() => normalizeMqttTopics([{ key: 'x', topic: 'devices/{deviceCode}/{unknown}', action: 'publish' }], 'test'), /Unknown/);
 });
@@ -526,23 +562,86 @@ test('MQTT.js publish delivers JSON content and rejects wildcard publish topics'
   assert.equal(invalid.status, 400);
 });
 
-test('realtime stream delivers MQTT.js messages and honors explicit deny ACLs', async () => {
-  const abort = new AbortController();
-  const timeout = setTimeout(() => abort.abort(), 10000);
-  const stream = await fetch(apiUrl + '/mqtt/stream', { signal: abort.signal,
-    headers: { Authorization: 'Bearer ' + generateToken({ id: owner }) } });
-  assert.equal(stream.status, 200);
-  const reader = stream.body.getReader();
+test('widget API v2 publishes its command without claiming device confirmation and rejects stale edits', async () => {
+  const monitor = clients.find((client) => client.options.clientId === 'test-publish-monitor');
+  const headers = { Authorization: 'Bearer ' + generateToken({ id: owner }), 'Content-Type': 'application/json' };
+  const received = once(monitor, 'message');
+  const action = await fetch(apiUrl + '/devices/A/widgets/relay/action', { method: 'POST', headers, body: JSON.stringify({ state: false }) });
+  assert.equal(action.status, 200);
+  const result = await action.json();
+  assert.equal(result.status, 'published');
+  assert.equal(Object.hasOwn(result, 'state'), false);
+  const [topic, payload] = await received;
+  assert.equal(topic, 'devices/A/commands/relay');
+  assert.deepEqual(JSON.parse(payload).content, { value: false });
+  const admin = DB.prepare('SELECT id FROM users WHERE email = ?').get(process.env.ADMIN_EMAIL);
+  const adminHeaders = { Authorization: 'Bearer ' + generateToken(admin), 'Content-Type': 'application/json' };
+  const runtime = await (await fetch(apiUrl + '/devices/A/widgets', { headers: adminHeaders })).json();
+  assert.equal(runtime.canConfigure, false);
+  assert.equal(runtime.configuration, undefined);
+  const current = await (await fetch(apiUrl + '/device-types/test/widgets', { headers: adminHeaders })).json();
+  assert.equal(current.schemaVersion, 2);
+  const retired = await fetch(apiUrl + '/devices/A/widgets', { method: 'PUT', headers: adminHeaders, body: '{}' });
+  assert.equal(retired.status, 404);
+  await retired.text();
+  for (const role of ['user', 'dev']) {
+    const id = DB.prepare('SELECT id FROM users WHERE role = ? LIMIT 1').get(role)?.id
+      || Number(DB.prepare('INSERT INTO users(email, role, password_hash) VALUES (?, ?, ?)').run('widget-dev@example.test', role, 'fixture').lastInsertRowid);
+    const deniedHeaders = { ...headers, Authorization: 'Bearer ' + generateToken({ id }) };
+    for (const method of ['GET', 'PUT']) {
+      const denied = await fetch(apiUrl + '/device-types/test/widgets', { method, headers: deniedHeaders,
+        ...(method === 'PUT' ? { body: '{}' } : {}) });
+      assert.equal(denied.status, 403);
+      await denied.text();
+    }
+  }
+  const body = JSON.stringify({ widgets: current.configuration.widgets, revision: current.configuration.revision });
+  const saved = await fetch(apiUrl + '/device-types/test/widgets', { method: 'PUT', headers: adminHeaders, body });
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.json()).configuration.revision, current.configuration.revision + 1);
+  const stale = await fetch(apiUrl + '/device-types/test/widgets', { method: 'PUT', headers: adminHeaders, body });
+  assert.equal(stale.status, 409);
+  assert.match((await stale.json()).error, /changed/);
+});
+
+function readMqttEvents(reader, onReady = () => {}) {
+  let buffer = '';
   const decoder = new TextDecoder();
-  let output = '';
-  try {
-    while (!output.includes('mqtt-message')) {
+  return async (predicate) => {
+    for (;;) {
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const data = frame.split('\n').find((line) => line.startsWith('data: '));
+        if (!data) continue;
+        const message = JSON.parse(data.slice(6));
+        if (frame.startsWith('event: ready\n')) { onReady(message); continue; }
+        if (!frame.startsWith('event: mqtt-message\n')) continue;
+        if (predicate(message)) return message;
+      }
       const chunk = await reader.read();
       assert.equal(chunk.done, false);
-      output += decoder.decode(chunk.value);
+      buffer += decoder.decode(chunk.value, { stream: true });
     }
-    assert.ok(output.includes('devices/A/telemetry/state'));
-    // Add a deny before an allow: SSE must apply the complete ACL, not just topic patterns.
+  };
+}
+
+test('realtime stream labels live, retained and cached states and honors explicit deny ACLs', async () => {
+  const abort = new AbortController();
+  const timeout = setTimeout(() => abort.abort(), 10000);
+  const headers = { Authorization: 'Bearer ' + generateToken({ id: owner }) };
+  const stream = await fetch(apiUrl + '/mqtt/stream', { signal: abort.signal, headers });
+  assert.equal(stream.status, 200);
+  const reader = stream.body.getReader();
+  const readiness = [];
+  const read = readMqttEvents(reader, (status) => readiness.push(status));
+  let cachedReader;
+  try {
+    const initial = await read((message) => message.topic === 'devices/A/telemetry/state');
+    assert.equal(typeof initial.retained, 'boolean');
+    assert.ok(initial.retained || initial.cached);
+    assert.ok(readiness.some((status) => status.connected === true));
     const firstRule = DB.prepare('SELECT MIN(id) AS id FROM mqtt_user_acl_rules').get().id;
     const denyId = firstRule - 1;
     DB.prepare(`INSERT INTO mqtt_user_acl_rules(id, user_id, action, topic_pattern, permission, source)
@@ -552,44 +651,45 @@ test('realtime stream delivers MQTT.js messages and honors explicit deny ACLs', 
     await backend.publishAsync('devices/A/telemetry/state', '{"content":{"deniedMarker":true}}', { qos: 1 });
     await backend.publishAsync('devices/A/telemetry/availability', 'oversizedMarker' + 'x'.repeat(256 * 1024), { qos: 1 });
     await backend.publishAsync('devices/A/telemetry/availability', 'online-test-marker', { qos: 1 });
-    output = '';
-    while (!output.includes('online-test-marker')) {
-      const chunk = await reader.read();
-      assert.equal(chunk.done, false);
-      output += decoder.decode(chunk.value);
-    }
-    assert.ok(!output.includes('deniedMarker'));
-    assert.ok(!output.includes('oversizedMarker'));
+    const seen = [];
+    const live = await read((message) => { seen.push(message); return message.content === 'online-test-marker'; });
+    assert.equal(live.retained, false);
+    assert.notEqual(live.cached, true);
+    assert.ok(!JSON.stringify(seen).includes('deniedMarker'));
+    assert.ok(!JSON.stringify(seen).includes('oversizedMarker'));
     DB.prepare('DELETE FROM mqtt_user_acl_rules WHERE id = ?').run(denyId);
+    const cached = await fetch(apiUrl + '/mqtt/stream', { signal: abort.signal, headers });
+    cachedReader = cached.body.getReader();
+    const replayed = await readMqttEvents(cachedReader)((message) => message.content === 'online-test-marker');
+    assert.equal(replayed.cached, true);
+    assert.equal(replayed.retained, false);
   } finally {
     clearTimeout(timeout);
     await reader.cancel();
+    await cachedReader?.cancel();
     abort.abort();
   }
 });
 
-test('claiming a device requires its secret and cannot take a device assigned to another user', () => {
+test('claiming uses only the generated device code and cannot take an assigned device', () => {
   const create = response();
-  DeviceController.create({ body: { code: 'CLAIM', device_type_id: 'test' } }, create);
+  DeviceController.create({ body: { name: 'Claimable device', device_type_id: 'test' } }, create);
   assert.equal(create.code, 201);
-  for (const secret of [undefined, 'wrong-secret']) {
-    const denied = response();
-    DeviceController.register({ user: { id: owner }, body: { code: 'CLAIM', secret_code: secret } }, denied);
-    assert.ok([400, 403].includes(denied.code));
-    assert.equal(DB.prepare("SELECT owner_id FROM devices WHERE code = 'CLAIM'").get().owner_id, null);
-  }
   const assigned = response();
-  DeviceController.create({ body: { code: 'ASSIGNED', device_type_id: 'test', owner_id: owner } }, assigned);
+  DeviceController.create({ body: { name: 'Assigned device', device_type_id: 'test', owner_email: 'device-owner@example.test', activated: false } }, assigned);
+  assert.equal(assigned.code, 201);
+  assert.equal(assigned.body.owner_id, owner);
+  assert.equal(assigned.body.activated, 1);
   const stranger = DB.prepare("SELECT id FROM users WHERE email = 'unrelated@example.test'").get();
   const forbidden = response();
-  DeviceController.register({ user: stranger, body: { code: 'ASSIGNED', secret_code: assigned.body.secret_code } }, forbidden);
+  DeviceController.register({ user: stranger, body: { code: assigned.body.code } }, forbidden);
   assert.equal(forbidden.code, 409);
   const accepted = response();
-  DeviceController.register({ user: { id: owner }, body: { code: 'CLAIM', secret_code: create.body.secret_code } }, accepted);
+  DeviceController.register({ user: { id: owner }, body: { code: create.body.code } }, accepted);
   assert.equal(accepted.code, 200);
-  assert.equal(DB.prepare("SELECT owner_id FROM devices WHERE code = 'CLAIM'").get().owner_id, owner);
+  assert.equal(DB.prepare('SELECT owner_id FROM devices WHERE code = ?').get(create.body.code).owner_id, owner);
   const repeated = response();
-  DeviceController.register({ user: stranger, body: { code: 'CLAIM', secret_code: create.body.secret_code } }, repeated);
+  DeviceController.register({ user: stranger, body: { code: create.body.code } }, repeated);
   assert.equal(repeated.code, 409);
 });
 
@@ -662,7 +762,7 @@ test('linked device broker permissions cannot subscribe across owners', async ()
 test('password changes refresh the current session and revoke older sessions; role changes and reinvites revoke tokens', async () => {
   const { UsersController } = require('../src/controllers/usersController.ts');
   const password = crypto.randomBytes(24).toString('hex');
-  const id = Number(UsersController.createUser('sessions@example.test', password).id);
+  const id = Number(createUser('sessions@example.test', password).id);
   const user = DB.prepare('SELECT * FROM users WHERE id = ?').get(id);
   const oldToken = generateToken(user);
   const changed = await fetch(apiUrl + '/auth/change-password', { method: 'POST', headers: {

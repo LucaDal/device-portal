@@ -1,8 +1,8 @@
 import type { NextFunction, Request, Response } from "express";
 import bcrypt from "bcrypt";
-import { DB } from "../config/database";
+import { normalizeEmail } from "../utils/email";
+import { findUserByEmail } from "../repositories/userRepository";
 import { AUTH_ERROR_CODES } from "@shared/constants/auth";
-import { UserWithPassword } from "@shared/types/user";
 
 function parseBasicAuthCredentials(req: Request): { email: string; password: string } | null {
   const header = String(req.headers.authorization || "");
@@ -21,7 +21,7 @@ function parseBasicAuthCredentials(req: Request): { email: string; password: str
   const separatorIndex = decoded.indexOf(":");
   if (separatorIndex <= 0) return null;
 
-  const email = decoded.slice(0, separatorIndex).trim().toLowerCase();
+  const email = normalizeEmail(decoded.slice(0, separatorIndex));
   const password = decoded.slice(separatorIndex + 1);
   if (!email || !password) return null;
 
@@ -36,9 +36,7 @@ export async function basicAuthMiddleware(req: Request, res: Response, next: Nex
     });
   }
 
-  const user = DB.prepare(
-    "SELECT id, email, role, password_hash, must_change_password FROM users WHERE email = ?"
-  ).get(credentials.email) as UserWithPassword | undefined;
+  const user = findUserByEmail(credentials.email);
 
   if (!user) {
     return res.status(401).send({ error: "Invalid email or password" });

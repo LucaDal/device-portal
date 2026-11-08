@@ -18,7 +18,7 @@ class DeviceDashboard {
   factory DeviceDashboard.fromJson(Map<String, dynamic> json) {
     final version = json['schemaVersion'];
 
-    if (version is! int || version != 1) {
+    if (version is! int || version != 2) {
       throw FormatException(
         'Versione della dashboard non supportata: $version',
       );

@@ -2,9 +2,9 @@ import { connect, MqttClient } from "mqtt";
 import type { Request, Response } from "express";
 import {
     MQTT_ACL_ACTIONS,
-    MQTT_ACL_PERMISSION,
 } from "@shared/constants/mqtt";
-import { DB } from "../config/database";
+import { getUserSession } from "../repositories/userRepository";
+import { listReadableTopicPatterns } from "../repositories/mqttAclRepository";
 import { brokerClientOptions, loadBrokerSettings } from "../utils/mqttBrokerSettings";
 import { canUserAccessMqttTopic } from "../utils/mqttUserAcl";
 import { MQTT_USER_ACL_SYNCED_EVENT, MQTT_BROKER_SETTINGS_CHANGED_EVENT, mqttAclEvents } from "./mqttAclEvents";
@@ -14,6 +14,8 @@ type MqttStreamMessage = {
     payload: string;
     content: unknown;
     receivedAt: string;
+    retained: boolean;
+    cached?: boolean;
 };
 
 type SseClient = {
@@ -46,26 +48,6 @@ let subscriberGeneration = 0;
 let activeTopicKey = "";
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
-
-function getReadableTopicPatternsForUser(userId: number): string[] {
-    const rows = DB.prepare(`
-        SELECT DISTINCT topic_pattern
-        FROM mqtt_user_acl_rules
-        WHERE user_id = ?
-          AND permission = ?
-          AND action IN (?, ?)
-        ORDER BY topic_pattern ASC
-    `).all(
-        userId,
-        MQTT_ACL_PERMISSION.ALLOW,
-        MQTT_ACL_ACTIONS.SUBSCRIBE,
-        MQTT_ACL_ACTIONS.ALL
-    ) as Array<{ topic_pattern: string }>;
-
-    return rows
-        .map((row) => String(row.topic_pattern || "").trim())
-        .filter(Boolean);
-}
 
 function sendEvent(res: Response, event: string, data: unknown) {
     if (res.destroyed || res.writableEnded) return;
@@ -134,8 +116,7 @@ function queueClientMessage(client: SseClient, message: MqttStreamMessage) {
 }
 
 function clientCanReceiveTopic(client: SseClient, topic: string): boolean {
-    const user = DB.prepare("SELECT must_change_password, session_version FROM users WHERE id = ?").get(client.userId) as
-        { must_change_password: number; session_version: number } | undefined;
+    const user = getUserSession(client.userId);
     if (!user || user.must_change_password || user.session_version !== client.sessionVersion) return false;
     return canUserAccessMqttTopic(client.userId, MQTT_ACL_ACTIONS.SUBSCRIBE, topic);
 }
@@ -149,12 +130,13 @@ function deliverMessage(message: MqttStreamMessage) {
     }
 }
 
-function createStreamMessage(topic: string, payload: string): MqttStreamMessage {
+function createStreamMessage(topic: string, payload: string, retained: boolean): MqttStreamMessage {
     return {
         topic,
         payload,
         content: parsePayload(payload),
         receivedAt: new Date().toISOString(),
+        retained,
     };
 }
 
@@ -210,14 +192,17 @@ function refreshSubscriber(force = false) {
         subscriber = current;
         current.on("connect", () => {
             void current.subscribeAsync(topicPatterns, { qos: 1 }).then((grants) => {
+                if (generation !== subscriberGeneration) return;
                 if (grants.some((grant) => Number(grant.qos) > 2)) {
                     broadcastServiceError("MQTT subscription denied");
+                    return;
                 }
+                for (const client of clients.values()) sendEvent(client.res, "ready", { connected: true });
             }).catch(() => broadcastServiceError("MQTT subscription failed"));
         });
-        current.on("message", (topic, payload) => {
+        current.on("message", (topic, payload, packet) => {
             if (generation === subscriberGeneration && payload.length <= MAX_PAYLOAD_BYTES) {
-                deliverMessage(createStreamMessage(topic, payload.toString()));
+                deliverMessage(createStreamMessage(topic, payload.toString(), packet.retain));
             }
         });
         current.on("error", () => {
@@ -270,7 +255,7 @@ function cleanupClient(clientId: string) {
 function sendCachedMessages(client: SseClient) {
     for (const message of cachedMessages.values()) {
         if (clientCanReceiveTopic(client, message.topic)) {
-            queueClientMessage(client, message);
+            queueClientMessage(client, { ...message, cached: true });
         }
     }
 }
@@ -294,6 +279,7 @@ function updateClientTopics(client: SseClient, nextTopics: string[]) {
     }
 
     sendEvent(client.res, "ready", {
+        connected: Boolean(subscriber?.connected),
         topics: client.topics.size,
         cachedMessages: cachedMessages.size,
     });
@@ -302,7 +288,7 @@ function updateClientTopics(client: SseClient, nextTopics: string[]) {
 }
 
 function refreshUserClientTopics(userId: number) {
-    const nextTopics = getReadableTopicPatternsForUser(userId);
+    const nextTopics = listReadableTopicPatterns(userId);
     for (const client of clients.values()) {
         if (client.userId === userId) {
             updateClientTopics(client, nextTopics);
@@ -315,6 +301,7 @@ mqttAclEvents.on(MQTT_USER_ACL_SYNCED_EVENT, (userId: number) => {
 });
 
 mqttAclEvents.on(MQTT_BROKER_SETTINGS_CHANGED_EVENT, () => {
+    broadcastServiceError("MQTT settings changed; reconnecting");
     cachedMessages.clear();
     cachedBytes = 0;
     for (const client of clients.values()) client.pending.clear();
@@ -325,7 +312,7 @@ mqttAclEvents.on(MQTT_BROKER_SETTINGS_CHANGED_EVENT, () => {
 });
 
 export function registerMqttSseClient(userId: number, req: Request, res: Response) {
-    const topics = getReadableTopicPatternsForUser(userId);
+    const topics = listReadableTopicPatterns(userId);
 
     res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -360,6 +347,7 @@ export function registerMqttSseClient(userId: number, req: Request, res: Respons
     }
 
     sendEvent(res, "ready", {
+        connected: Boolean(subscriber?.connected),
         topics: client.topics.size,
         cachedMessages: cachedMessages.size,
     });

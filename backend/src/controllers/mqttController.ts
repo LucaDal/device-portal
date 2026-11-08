@@ -1,5 +1,5 @@
 import { connectAsync } from "mqtt";
-import { DB } from "../config/database";
+import { listDeviceAclRules } from "../repositories/mqttAclRepository";
 import { MQTT_ACL_ACTIONS } from "@shared/constants/mqtt";
 import { MqttBrokerSettings, MqttPublishInput } from "@shared/types/mqtt_publish";
 import { canUserAccessMqttTopic } from "../utils/mqttUserAcl";
@@ -107,12 +107,7 @@ export const MqttController = {
             const deviceCode = String(req.params.deviceCode || "").trim();
             if (!deviceCode) return res.status(400).send({ error: "deviceCode is required" });
 
-            const rows = DB.prepare(`
-                SELECT id, device_code, action, topic_pattern, permission, priority, source, source_key, created_at
-                FROM mqtt_acl_rules
-                WHERE device_code = ?
-                ORDER BY priority ASC, id ASC
-            `).all(deviceCode);
+            const rows = listDeviceAclRules(deviceCode);
             return res.send(rows);
         } catch (err) {
             console.error(err);
@@ -141,24 +136,4 @@ export const MqttController = {
         }
     },
 
-    async publishMessageWithSession(req: any, res: any) {
-        try {
-            const input = normalizePublishInput(req);
-            if (!input) {
-                return res.status(400).send({
-                    error: "topic and JSON content are required",
-                });
-            }
-
-            const result = await publishForAuthenticatedUser(input, req.user);
-            if (!result.ok) {
-                return res.status(result.status).send(result.body);
-            }
-
-            return res.send(result.body);
-        } catch (err) {
-            console.error(err);
-            return res.status(500).send({ error: "Failed to publish MQTT message" });
-        }
-    },
 };

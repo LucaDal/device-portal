@@ -21,21 +21,22 @@ require('ts-node').register({ project: path.join(__dirname, '../tsconfig.json'),
 require('tsconfig-paths').register({ baseUrl: path.join(__dirname, '..'), paths: { '@shared/*': ['../shared/*'] } });
 const express = require('express');
 const { DB } = require('../src/config/database.ts');
-const { UsersController } = require('../src/controllers/usersController.ts');
+require('../src/config/bootstrap.ts').ensureAdminUser();
+const { createUser } = require('../src/services/userService.ts');
 const { encryptSensitiveDeviceProperties } = require('../src/utils/devicePropertiesSecurity.ts');
 const { sensitiveIpRateLimitMiddleware } = require('../src/middleware/rateLimit.ts');
 
 const deviceSecret = randomBytes(24).toString('hex');
 const otherSecret = randomBytes(24).toString('hex');
 const userPassword = randomBytes(24).toString('hex');
-const owner = Number(UsersController.createUser('routes-owner@example.test', userPassword).id);
+const owner = Number(createUser('routes-owner@example.test', userPassword).id);
 const firmware = Buffer.from('test-firmware');
 const insertType = DB.prepare(`INSERT INTO device_types(id, firmware_version, firmware_build, mqtt_enabled, genericProperties, mqttTopics)
   VALUES (?, '1.0', ?, 1, ?, ?)`);
 insertType.run('sensor', firmware, JSON.stringify({ mode: { type: 'string', value: 'default' } }),
   JSON.stringify([{ key: 'telemetry', action: 'publish', topic: 'devices/{deviceCode}/telemetry/state' }]));
 insertType.run('other', firmware, '{}', '[]');
-const insertDevice = DB.prepare(`INSERT INTO devices(code, device_type_id, owner_id, activated, device_secret_hash) VALUES (?, ?, ?, 1, ?)`);
+const insertDevice = DB.prepare(`INSERT INTO devices (name, code, device_type_id, owner_id, activated, device_secret_hash) VALUES ('Fixture device', ?, ?, ?, 1, ?)`);
 insertDevice.run('A', 'sensor', owner, createHash('sha256').update(deviceSecret).digest('hex'));
 insertDevice.run('B', 'other', owner, createHash('sha256').update(otherSecret).digest('hex'));
 const properties = encryptSensitiveDeviceProperties({
@@ -68,7 +69,7 @@ after(async () => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-test('device configuration requires the device secret and returns uncached properties and resolved topics', async () => {
+test('device configuration requires the device secret and returns uncached properties without MQTT topics', async () => {
   for (const auth of [{}, { ...headers, 'x-device-secret': otherSecret }]) {
     assert.equal((await fetch(baseUrl + '/device/configuration', { headers: auth })).status, 401);
   }
@@ -76,7 +77,7 @@ test('device configuration requires the device secret and returns uncached prope
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.deepEqual(await response.json(), {
-    mode: 'custom', wifiPassword: 'fixture-password', telemetry: 'devices/A/telemetry/state',
+    mode: 'default', wifiPassword: 'fixture-password',
   });
   const log = DB.prepare("SELECT * FROM device_request_logs WHERE event_type = 'device_configuration' AND status_code = 200").get();
   assert.equal(log.path, '/device/configuration');
@@ -99,6 +100,8 @@ test('MQTT provisioning keeps device authentication, HTTPS and availability chec
   assert.equal(credentials.username, 'dp-device:A');
   assert.equal(credentials.host, 'mqtt.example.test');
   assert.ok(credentials.password);
+  assert.equal(credentials.schemaVersion, 2);
+  assert.deepEqual(credentials.topics, { availability: 'devices/A/telemetry/availability', telemetry: 'devices/A/telemetry/state' });
   DB.prepare("UPDATE devices SET mqtt_enabled = 0 WHERE code = 'A'").run();
   try { assert.equal((await fetch(endpoint, { headers: secure })).status, 403); }
   finally { DB.prepare("UPDATE devices SET mqtt_enabled = 1 WHERE code = 'A'").run(); }

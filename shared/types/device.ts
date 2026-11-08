@@ -1,6 +1,7 @@
-import { DeviceType } from "./device_type";
+export const DEVICE_NAME_MAX_LENGTH = 128;
 
 export interface Device {
+  name: string;
   code: string;
   type_id: string;
   owner_id: number | null;
@@ -8,6 +9,7 @@ export interface Device {
 }
 
 export interface DeviceWithRelations {
+    name: string;
     mqtt_enabled?: number;
     type_mqtt_enabled?: number;
     mqtt_available?: boolean;
@@ -26,8 +28,14 @@ export interface DeviceWithRelations {
     device_properties?: string | Record<string, unknown> | null;
 }
 
-export interface DeviceProvisioningResult extends DeviceWithRelations {
+export interface DeviceCreationResult extends DeviceWithRelations {
     secret_code: string;
+}
+
+export interface DeviceCreateInput {
+    name: string;
+    device_type_id: string;
+    owner_email?: string;
 }
 
 export interface DeviceShareRow {

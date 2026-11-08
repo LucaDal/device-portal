@@ -1,7 +1,7 @@
 import fs from "fs";
 import crypto from "crypto";
 import type { IClientOptions } from "mqtt";
-import { DB } from "../config/database";
+import { getSetting, saveSetting } from "../repositories/settingsRepository";
 import { DEFAULT_MQTT_BROKER_SETTINGS, MqttBrokerSettings, MqttBrokerSettingsView } from "@shared/types/mqtt_publish";
 import { readMqttSecret, encryptMqttSecret, decryptMqttSecret } from "./mqttSecrets";
 import { dynsecEnabled, dynsecConnection } from "./mqttConfiguration";
@@ -11,10 +11,9 @@ const SETTINGS_KEY = "mqtt_broker_settings";
 const PASSWORD_PURPOSE = "device-portal-mqtt-broker-v1";
 
 function readStoredBrokerSettings(): MqttBrokerSettings {
-    const row = DB.prepare("SELECT value FROM app_settings WHERE key = ?").get(SETTINGS_KEY) as
-        { value: string | null } | undefined;
-    if (!row?.value) return { ...DEFAULT_MQTT_BROKER_SETTINGS };
-    const saved = JSON.parse(row.value) as Partial<MqttBrokerSettings>;
+    const raw = getSetting(SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_MQTT_BROKER_SETTINGS };
+    const saved = JSON.parse(raw) as Partial<MqttBrokerSettings>;
     return {
         ...DEFAULT_MQTT_BROKER_SETTINGS,
         ...saved,
@@ -102,9 +101,7 @@ export function saveBrokerSettings(body: Record<string, unknown>): MqttBrokerSet
         ...settings,
         password: settings.password ? encryptMqttSecret(settings.password, PASSWORD_PURPOSE, SETTINGS_KEY) : "",
     };
-    DB.prepare("INSERT INTO app_settings(key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) " +
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP")
-        .run(SETTINGS_KEY, JSON.stringify(stored));
+    saveSetting(SETTINGS_KEY, JSON.stringify(stored));
     mqttAclEvents.emit(MQTT_BROKER_SETTINGS_CHANGED_EVENT);
     return brokerSettingsView();
 }

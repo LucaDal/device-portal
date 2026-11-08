@@ -1,34 +1,35 @@
-import { DB } from "../config/database";
+import { db } from "../config/database";
+import { findDevice, isDeviceOwner, canAccessDevice, listDevicesForUser, updateDevice, createDevice, claimDevice,
+    deleteDevice, revokeDeviceOwnership, getProvisionedDevice, getDeviceWithType,
+    getDeviceProperties, saveDeviceProperties } from "../repositories/deviceRepository";
+import { findDeviceType } from "../repositories/deviceTypeRepository";
+import { findUserByEmail, findUserInvitation } from "../repositories/userRepository";
+import { listDeviceShares, listDeviceShareInvitations, shareDeviceWithUser, saveDeviceShareInvitation,
+    deleteDeviceShare, deleteDeviceShareInvitation } from "../repositories/deviceShareRepository";
+import { normalizeEmail, isValidEmail } from "../utils/email";
 import crypto from "crypto";
 import { ROLES } from "@shared/constants/auth";
-import { DeviceProvisioningResult } from "@shared/types/device";
+import { DEVICE_NAME_MAX_LENGTH } from "@shared/types/device";
 import {
     DevicePropertyMap,
     SavedProperties,
     castPropertyValue,
+    parseSavedPropertyMap,
 } from "@shared/types/properties";
 import {
     decryptSensitiveDeviceProperties,
     encryptSensitiveDeviceProperties,
     parseTypePropertyDefinitions,
 } from "../utils/devicePropertiesSecurity";
-import { generateDeviceSecret, hashDeviceSecret, verifyDeviceSecret } from "../utils/deviceSecrets";
+import { generateDeviceSecret, hashDeviceSecret } from "../utils/deviceSecrets";
 import { syncGeneratedMqttAclRulesForDevice } from "../utils/deviceTypeMqtt";
-import { ACTIVE_MQTT_DEVICE_SQL, getDeviceMqttState, parseMqttEnabled } from "../services/deviceMqttPolicy";
+import { getDeviceMqttState, parseMqttEnabled } from "../services/deviceMqttPolicy";
 import {
     syncGeneratedMqttUserAclRulesForAllUsers,
     syncGeneratedMqttUserAclRulesForUser,
 } from "../utils/mqttUserAcl";
 
 const SHARE_INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function normalizeEmail(value: string): string {
-    return String(value || "").trim().toLowerCase();
-}
-
-function isValidEmail(value: string): boolean {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
 
 function getCurrentUser(req: any) {
     const userId = Number((req.user as any).id);
@@ -38,41 +39,7 @@ function getCurrentUser(req: any) {
 
 function canManageSharesOrDelete(userId: number, role: string, deviceCode: string): boolean {
     if (role === ROLES.ADMIN) return true;
-    const owned = DB.prepare("SELECT 1 FROM devices WHERE code = ? AND owner_id = ? LIMIT 1").get(
-        deviceCode,
-        userId
-    );
-    return Boolean(owned);
-}
-
-function isDeviceOwner(userId: number, deviceCode: string): boolean {
-    const owned = DB.prepare("SELECT 1 FROM devices WHERE code = ? AND owner_id = ? LIMIT 1").get(
-        deviceCode,
-        userId
-    );
-    return Boolean(owned);
-}
-
-function parseSavedProperties(raw: unknown): SavedProperties {
-    if (!raw) return {};
-    try {
-        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-        return parsed as SavedProperties;
-    } catch {
-        return {};
-    }
-}
-
-function filterVisibleTypeDefinitions(raw: unknown): DevicePropertyMap {
-    const definitions = parseTypePropertyDefinitions(raw);
-    const visibleDefinitions: DevicePropertyMap = {};
-    for (const [key, definition] of Object.entries(definitions)) {
-        if (definition.visible !== false) {
-            visibleDefinitions[key] = definition;
-        }
-    }
-    return visibleDefinitions;
+    return isDeviceOwner(userId, deviceCode);
 }
 
 function filterPropertiesByDefinitions(
@@ -140,67 +107,30 @@ export const DeviceController = {
     // GET /devices
     list(req: any, res: any) {
         const { userId, role } = getCurrentUser(req);
-        let sql = `
-            SELECT
-                d.code,
-                d.device_type_id,
-                d.owner_id,
-                ou.email AS owner_email,
-                d.activated,
-                COALESCE(d.mqtt_enabled, 1) AS mqtt_enabled,
-                dt.mqtt_enabled AS type_mqtt_enabled,
-                (${ACTIVE_MQTT_DEVICE_SQL}) AS mqtt_available,
-                CASE WHEN ds.user_id IS NULL THEN 0 ELSE 1 END AS is_shared,
-                dt.description AS device_type_description,
-                dt.firmware_version,
-                dt.deviceProperties AS type_deviceProperties,
-                dt.genericProperties AS type_genericProperties,
-                dt.mqttTopics AS type_mqttTopics,
-                CASE
-                    WHEN ? = 1 OR d.owner_id = ? THEN COALESCE(dp.properties, '{}')
-                    ELSE NULL
-                END AS device_properties
-            FROM devices d
-            JOIN device_types dt ON dt.id = d.device_type_id
-            LEFT JOIN users ou ON ou.id = d.owner_id
-            LEFT JOIN device_properties dp ON dp.device_code = d.code
-            LEFT JOIN device_shares ds
-                ON ds.device_code = d.code
-               AND ds.user_id = ?
-        `;
-
-        const params: any[] = [role === ROLES.ADMIN ? 1 : 0, userId, userId];
-
-        if (role !== ROLES.ADMIN) {
-            sql += ` WHERE d.owner_id = ? OR ds.user_id IS NOT NULL`;
-            params.push(userId);
-        }
-
-        sql += ` ORDER BY d.code ASC`;
-
-        const stmt = DB.prepare(sql);
-        const rows = (stmt.all(...params) as Array<any>).map((row) => ({
+        const rows = listDevicesForUser(userId, role).map((row) => ({
             ...row,
             mqtt_available: Boolean(row.mqtt_available),
             type_mqttTopics: row.mqtt_available ? row.type_mqttTopics : "[]",
         }));
 
         const sanitizedRows = rows.map((row) => {
-            const visibleTypeDefinitions = filterVisibleTypeDefinitions(row?.type_deviceProperties);
-            const type_deviceProperties = JSON.stringify(visibleTypeDefinitions);
+            const definitions = parseTypePropertyDefinitions(row?.type_deviceProperties);
+            const type_deviceProperties = JSON.stringify(definitions);
             if (!row?.device_properties) {
                 return {
                     ...row,
                     type_deviceProperties,
+                    type_genericProperties: "{}",
                 };
             }
             try {
-                const parsedProps = parseSavedProperties(row.device_properties);
-                const visibleProps = filterPropertiesByDefinitions(parsedProps, visibleTypeDefinitions);
-                const decrypted = decryptSensitiveDeviceProperties(visibleProps);
+                const parsedProps = parseSavedPropertyMap(row.device_properties);
+                const deviceProps = filterPropertiesByDefinitions(parsedProps, definitions);
+                const decrypted = decryptSensitiveDeviceProperties(deviceProps);
                 return {
                     ...row,
                     type_deviceProperties,
+                    type_genericProperties: "{}",
                     device_properties: JSON.stringify(decrypted),
                 };
             } catch (err) {
@@ -208,6 +138,7 @@ export const DeviceController = {
                 return {
                     ...row,
                     type_deviceProperties,
+                    type_genericProperties: "{}",
                     device_properties: JSON.stringify({}),
                 };
             }
@@ -226,11 +157,11 @@ export const DeviceController = {
         if (enabled && !device.type_mqtt_enabled) {
             return res.status(409).send({ error: "Enable MQTT on the Device Type first" });
         }
-        DB.transaction(() => {
-            DB.prepare("UPDATE devices SET mqtt_enabled = ? WHERE code = ?").run(enabled ? 1 : 0, code);
+        db.transaction(() => {
+            updateDevice(code, { mqtt_enabled: enabled ? 1 : 0 });
             syncGeneratedMqttAclRulesForDevice(code);
             syncGeneratedMqttUserAclRulesForAllUsers();
-        })();
+        });
         const updated = getDeviceMqttState(code)!;
         return res.send({ ok: true, ...updated, mqtt_available: Boolean(updated.mqtt_available) });
     },
@@ -238,21 +169,19 @@ export const DeviceController = {
     // POST /devices/register
     register(req: any, res: any) {
         const userId = Number((req.user as any).id);
-        const { code, secret_code: secret } = req.body || {};
-        if (typeof code !== "string" || typeof secret !== "string" || !code || !secret) {
-            return res.status(400).json({ error: "Device code and secret code are required" });
+        const { code } = req.body || {};
+        if (typeof code !== "string" || !code.trim()) {
+            return res.status(400).json({ error: "Device code is required" });
         }
-        const existing = DB.prepare("SELECT device_secret_hash, activated, owner_id FROM devices WHERE code = ?")
-            .get(code) as { device_secret_hash: string; activated: number; owner_id: number | null } | undefined;
-        if (!existing || !verifyDeviceSecret(secret, existing.device_secret_hash)) {
-            return res.status(403).json({ error: "Invalid device credentials" });
-        }
-        if (existing.activated || (existing.owner_id !== null && existing.owner_id !== userId)) {
-            return res.status(409).json({ error: "Device is already assigned" });
-        }
-        DB.prepare("UPDATE devices SET owner_id = ?, activated = 1 WHERE code = ?").run(userId, code);
-        syncGeneratedMqttAclRulesForDevice(code);
-        syncGeneratedMqttUserAclRulesForAllUsers();
+        const existing = findDevice(code.trim());
+        if (!existing) return res.status(404).json({ error: "Device not found" });
+        const claimed = db.transaction(() => {
+            if (!claimDevice(existing.code, userId).changes) return false;
+            syncGeneratedMqttAclRulesForDevice(existing.code);
+            syncGeneratedMqttUserAclRulesForAllUsers();
+            return true;
+        });
+        if (!claimed) return res.status(409).json({ error: "Device is already assigned" });
         res.json({ ok: true });
     },
 
@@ -263,8 +192,7 @@ export const DeviceController = {
             return res.status(403).send({ error: "You are not allowed to delete this device" });
         }
 
-        const stmt = DB.prepare("DELETE FROM devices WHERE code = ?");
-        const info = stmt.run(code);
+        const info = deleteDevice(code);
 
         if (info.changes === 0) {
             return res.status(400).send({ message: "No device to delete found" });
@@ -282,16 +210,12 @@ export const DeviceController = {
             return res.status(400).send({ error: "deviceCode and ownerEmail are required" });
         }
 
-        const owner = DB.prepare("SELECT id FROM users WHERE email = ?").get(ownerEmail) as
-            | { id: number }
-            | undefined;
+        const owner = findUserByEmail(ownerEmail);
         if (!owner) {
             return res.status(404).send({ error: "Owner user not found" });
         }
 
-        const device = DB.prepare("SELECT code, owner_id FROM devices WHERE code = ?").get(deviceCode) as
-            | { code: string; owner_id: number | null }
-            | undefined;
+        const device = findDevice(deviceCode);
         if (!device) {
             return res.status(404).send({ error: "Device not found" });
         }
@@ -302,11 +226,7 @@ export const DeviceController = {
             return res.status(409).send({ error: "Device owner does not match ownerEmail" });
         }
 
-        DB.transaction(() => {
-            DB.prepare("UPDATE devices SET owner_id = NULL, activated = 0 WHERE code = ?").run(deviceCode);
-            DB.prepare("DELETE FROM device_shares WHERE device_code = ?").run(deviceCode);
-            DB.prepare("DELETE FROM device_share_invitations WHERE device_code = ?").run(deviceCode);
-        })();
+        revokeDeviceOwnership(deviceCode);
         syncGeneratedMqttAclRulesForDevice(deviceCode);
         syncGeneratedMqttUserAclRulesForAllUsers();
 
@@ -316,99 +236,43 @@ export const DeviceController = {
 
     // POST /devices
     create(req: any, res: any) {
-        const { owner_id, owner_email, activated } = req.body;
-        const code = String(req.body?.code || "").trim();
-        const deviceTypeId = String(req.body?.device_type_id || "").trim();
-
-        if (!code || !deviceTypeId) {
-            return res
-                .status(400)
-                .json({ error: "code and device_type_id are required" });
+        const body = req.body || {};
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        if (!name || name.length > DEVICE_NAME_MAX_LENGTH) {
+            return res.status(400).json({ error: `Device name must contain 1–${DEVICE_NAME_MAX_LENGTH} characters` });
         }
-
-        if (!/^[A-Za-z0-9_-]+$/.test(code)) {
-            return res.status(400).json({ error: "Device code must contain only letters, numbers, underscores or hyphens" });
+        if (typeof body.device_type_id !== "string" || !body.device_type_id.trim()) {
+            return res.status(400).json({ error: "Device type is required" });
         }
-
+        if (body.owner_email !== undefined && typeof body.owner_email !== "string") {
+            return res.status(400).json({ error: "Owner email must be a string" });
+        }
+        const ownerEmail = normalizeEmail(body.owner_email);
+        if (ownerEmail && !isValidEmail(ownerEmail)) return res.status(400).json({ error: "Invalid owner email" });
+        const owner = ownerEmail ? findUserByEmail(ownerEmail) : undefined;
+        if (ownerEmail && !owner) return res.status(400).json({ error: "Owner email not found" });
+        if (body.clone_from_code !== undefined) {
+            return res.status(400).json({ error: "Clone a Device Type instead of a device" });
+        }
+        const deviceTypeId = body.device_type_id.trim();
+        const deviceType = findDeviceType(deviceTypeId);
+        if (!deviceType) return res.status(400).json({ error: "Device type not found" });
+        const code = crypto.randomUUID();
+        const secret = generateDeviceSecret();
+        res.setHeader("Cache-Control", "no-store");
         try {
-            let resolvedOwnerId: number | null = owner_id ? Number(owner_id) : null;
-            const normalizedOwnerEmail = normalizeEmail(owner_email || "");
-            const deviceSecret = generateDeviceSecret();
-            const deviceSecretHash = hashDeviceSecret(deviceSecret);
-            if (normalizedOwnerEmail) {
-                const ownerUser = DB.prepare("SELECT id FROM users WHERE email = ?").get(
-                    normalizedOwnerEmail
-                ) as { id: number } | undefined;
-                if (!ownerUser) {
-                    return res.status(400).json({ error: "Owner email not found" });
-                }
-                resolvedOwnerId = ownerUser.id;
-            }
-
-            DB.transaction(() => {
-                DB.prepare(`
-                    INSERT INTO devices (code, device_type_id, owner_id, activated, device_secret_hash)
-                    VALUES (?, ?, ?, ?, ?)
-                `).run(
-                    code,
-                    deviceTypeId,
-                    resolvedOwnerId,
-                    activated ? 1 : 0,
-                    deviceSecretHash
-                );
-
-                DB.prepare("INSERT INTO device_properties (device_code, properties) VALUES (?, ?)").run(code, "{}");
-            })();
-
-            syncGeneratedMqttAclRulesForDevice(code);
-            syncGeneratedMqttUserAclRulesForAllUsers();
-
-            const created = DB.prepare(`
-SELECT d.code, d.device_type_id, d.owner_id, u.email AS owner_email, d.activated
-FROM devices d
-LEFT JOIN users u ON u.id = d.owner_id
-WHERE d.code = ?
-`).get(code) as DeviceProvisioningResult | undefined;
-
-            if (!created) {
-                return res.status(500).json({ error: "Created device could not be loaded" });
-            }
-
-            res.status(201).json({
-                ...created,
-                secret_code: deviceSecret,
+            const created = db.transaction(() => {
+                createDevice({ code, name, device_type_id: deviceTypeId, owner_id: owner?.id ?? null,
+                    activated: owner ? 1 : 0, device_secret_hash: hashDeviceSecret(secret) });
+                syncGeneratedMqttAclRulesForDevice(code);
+                syncGeneratedMqttUserAclRulesForAllUsers();
+                return getProvisionedDevice(code)!;
             });
-        } catch (e: any) {
-            if (e.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || e.code === "SQLITE_CONSTRAINT_UNIQUE") {
-                return res.status(400).json({ error: "code already exists" });
-            }
-            console.error(e);
-            res.status(500).json({ error: "Internal error" });
+            return res.status(201).json({ ...created, secret_code: secret });
+        } catch (error) {
+            console.error(error);
+            return res.status(500).json({ error: "Failed to create device" });
         }
-    },
-    regenerateSecretCode(req: any, res: any) {
-        const code = String(req.params.code || "").trim();
-        if (!code) {
-            return res.status(400).send({ error: "Device code is required" });
-        }
-
-        const device = DB.prepare("SELECT code FROM devices WHERE code = ?").get(code) as
-            | { code: string }
-            | undefined;
-        if (!device) {
-            return res.status(404).send({ error: "Device not found" });
-        }
-
-        const deviceSecret = generateDeviceSecret();
-        const deviceSecretHash = hashDeviceSecret(deviceSecret);
-
-        DB.prepare("UPDATE devices SET device_secret_hash = ? WHERE code = ?").run(deviceSecretHash, code);
-
-        return res.send({
-            ok: true,
-            code,
-            secret_code: deviceSecret,
-        });
     },
     // PUT /devices/:code/properties
     updateProperties(req: any, res: any) {
@@ -433,9 +297,7 @@ WHERE d.code = ?
                 .json({ error: "properties is not valid JSON" });
         }
 
-        const device = DB.prepare(
-            "SELECT code FROM devices WHERE code = ?"
-        ).get(code);
+        const device = findDevice(code);
 
         if (!device) {
             return res.status(400).json({ error: "Device not found" });
@@ -444,24 +306,17 @@ WHERE d.code = ?
             return res.status(403).json({ error: "Only the device owner can update device properties" });
         }
 
-        const deviceTypeRow = DB.prepare(
-            `SELECT dt.deviceProperties AS device_properties_schema
-             FROM devices d
-             JOIN device_types dt ON dt.id = d.device_type_id
-             WHERE d.code = ?`
-        ).get(code) as { device_properties_schema?: string | null } | undefined;
+        const deviceTypeRow = getDeviceWithType(code);
         if (!deviceTypeRow) {
             return res.status(400).json({ error: "Device type not found" });
         }
         const schema = parseTypePropertyDefinitions(deviceTypeRow.device_properties_schema);
 
-        const existingProps = DB.prepare(
-            "SELECT id, properties FROM device_properties WHERE device_code = ?"
-        ).get(code) as { id: number; properties?: string | null } | undefined;
+        const existingProps = getDeviceProperties(code);
 
         let propertiesJson = "{}";
         try {
-            const currentProps = parseSavedProperties(existingProps?.properties);
+            const currentProps = parseSavedPropertyMap(existingProps?.properties);
             const normalizedProps = normalizePropertiesForSchema(parsedProperties, schema);
             if (!normalizedProps.ok) {
                 return res.status(400).json({ error: normalizedProps.error });
@@ -480,17 +335,7 @@ WHERE d.code = ?
             });
         }
 
-        if (existingProps) {
-            DB.prepare(`UPDATE device_properties
-                            SET properties = ?
-                            WHERE device_code = ?
-            `).run(propertiesJson, code);
-        } else {
-            DB.prepare(`
-                INSERT INTO device_properties (device_code, properties)
-                VALUES (?, ?)
-            `).run(code, propertiesJson);
-        }
+        saveDeviceProperties(code, propertiesJson);
 
         res.json({ ok: true });
     },
@@ -500,50 +345,13 @@ WHERE d.code = ?
         const { code } = req.params;
         const { userId, role } = getCurrentUser(req);
 
-        const canView = role === ROLES.ADMIN || Boolean(
-            DB.prepare(
-                `SELECT 1 FROM devices d
-                 LEFT JOIN device_shares ds ON ds.device_code = d.code AND ds.user_id = ?
-                 WHERE d.code = ? AND (d.owner_id = ? OR ds.user_id IS NOT NULL)
-                 LIMIT 1`
-            ).get(userId, code, userId)
-        );
+        const canView = canAccessDevice(userId, role, code);
         if (!canView) {
             return res.status(403).send({ error: "You are not allowed to view shares for this device" });
         }
 
-        const shares = DB.prepare(`
-            SELECT
-                ds.device_code,
-                ds.user_id,
-                ds.shared_by,
-                ds.created_at,
-                u.email AS user_email,
-                sb.email AS shared_by_email
-            FROM device_shares ds
-            JOIN users u ON u.id = ds.user_id
-            LEFT JOIN users sb ON sb.id = ds.shared_by
-            WHERE ds.device_code = ?
-            ORDER BY ds.created_at DESC
-        `).all(code);
-
-        const invitations = DB.prepare(`
-            SELECT
-                dsi.id,
-                dsi.device_code,
-                dsi.email,
-                dsi.invited_by,
-                dsi.expires_at,
-                dsi.accepted_at,
-                dsi.created_at,
-                u.email AS invited_by_email
-            FROM device_share_invitations dsi
-            LEFT JOIN users u ON u.id = dsi.invited_by
-            WHERE dsi.device_code = ?
-              AND dsi.accepted_at IS NULL
-              AND datetime(dsi.expires_at) > datetime('now')
-            ORDER BY dsi.created_at DESC
-        `).all(code);
+        const shares = listDeviceShares(code);
+        const invitations = listDeviceShareInvitations(code);
 
         return res.send({ shares, invitations });
     },
@@ -563,30 +371,18 @@ WHERE d.code = ?
                 return res.status(400).send({ error: "Invalid email" });
             }
 
-            const device = DB.prepare("SELECT code, owner_id FROM devices WHERE code = ?").get(code) as
-                | { code: string; owner_id: number | null }
-                | undefined;
+            const device = findDevice(code);
             if (!device) {
                 return res.status(404).send({ error: "Device not found" });
             }
 
-            const targetUser = DB.prepare("SELECT id, email FROM users WHERE email = ?").get(normalizedEmail) as
-                | { id: number; email: string }
-                | undefined;
+            const targetUser = findUserByEmail(normalizedEmail);
             if (targetUser && targetUser.id === device.owner_id) {
                 return res.status(409).send({ error: "Cannot share with the owner of the device" });
             }
 
             if (!targetUser) {
-                const adminInvitation = DB.prepare(`
-                SELECT id, accepted_at, expires_at
-                FROM user_invitations
-                WHERE email = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-                `).get(normalizedEmail) as
-                    | { id: number; accepted_at: string | null; expires_at: string }
-                    | undefined;
+                const adminInvitation = findUserInvitation(normalizedEmail);
 
                 if (!adminInvitation) {
                     return res.status(403).send({
@@ -605,18 +401,7 @@ WHERE d.code = ?
             }
 
             if (targetUser) {
-                DB.prepare(`
-                INSERT INTO device_shares (device_code, user_id, shared_by)
-                VALUES (?, ?, ?)
-                ON CONFLICT(device_code, user_id) DO UPDATE SET
-                    shared_by = excluded.shared_by,
-                    created_at = CURRENT_TIMESTAMP
-                `).run(code, targetUser.id, userId);
-                DB.prepare(`
-                UPDATE device_share_invitations
-                SET accepted_at = COALESCE(accepted_at, CURRENT_TIMESTAMP)
-                WHERE device_code = ? AND email = ? AND accepted_at IS NULL
-                `).run(code, normalizedEmail);
+                shareDeviceWithUser(code, targetUser.id, normalizedEmail, userId);
                 syncGeneratedMqttUserAclRulesForUser(targetUser.id);
 
                 return res.status(201).send({
@@ -630,33 +415,7 @@ WHERE d.code = ?
 
             const token = crypto.randomBytes(24).toString("hex");
             const expiresAt = new Date(Date.now() + SHARE_INVITE_TTL_MS).toISOString();
-            const existingInvite = DB.prepare(`
-            SELECT id
-            FROM device_share_invitations
-            WHERE device_code = ?
-              AND email = ?
-              AND accepted_at IS NULL
-            ORDER BY id DESC
-            LIMIT 1
-            `).get(code, normalizedEmail) as { id: number } | undefined;
-
-            if (existingInvite) {
-                DB.prepare(`
-                UPDATE device_share_invitations
-                SET invitation_token = ?,
-                    invited_by = ?,
-                    expires_at = ?,
-                    created_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                `).run(token, userId, expiresAt, existingInvite.id);
-            } else {
-                DB.prepare(`
-                INSERT INTO device_share_invitations (
-                    device_code, email, invitation_token, invited_by, expires_at, accepted_at
-                )
-                VALUES (?, ?, ?, ?, ?, NULL)
-                `).run(code, normalizedEmail, token, userId, expiresAt);
-            }
+            saveDeviceShareInvitation(code, normalizedEmail, token, userId, expiresAt);
 
             return res.status(201).send({
                 ok: true,
@@ -683,9 +442,7 @@ WHERE d.code = ?
             return res.status(403).send({ error: "Only device owner or admin can revoke sharing" });
         }
 
-        const info = DB.prepare(
-            "DELETE FROM device_shares WHERE device_code = ? AND user_id = ?"
-        ).run(code, targetUserId);
+        const info = deleteDeviceShare(code, targetUserId);
         if (info.changes === 0) {
             return res.status(404).send({ error: "Share not found" });
         }
@@ -705,9 +462,7 @@ WHERE d.code = ?
             return res.status(403).send({ error: "Only device owner or admin can revoke invitation" });
         }
 
-        const info = DB.prepare(
-            "DELETE FROM device_share_invitations WHERE id = ? AND device_code = ? AND accepted_at IS NULL"
-        ).run(invitationId, code);
+        const info = deleteDeviceShareInvitation(invitationId, code);
         if (info.changes === 0) {
             return res.status(404).send({ error: "Pending invitation not found" });
         }

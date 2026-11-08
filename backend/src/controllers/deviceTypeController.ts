@@ -1,4 +1,9 @@
-import { DB } from "../config/database";
+import { db } from "../config/database";
+import { listDeviceTypes, findDeviceType, insertDeviceType, updateDeviceType, deleteDeviceType, getFirmware } from "../repositories/deviceTypeRepository";
+import { loadDeviceTypeWidgets, replaceDeviceTypeWidgets } from "../repositories/deviceTypeWidgetRepository";
+import { DeviceDashboardWidget, parseDeviceDashboardWidgets } from "@shared/widgets";
+import { getDeviceTypeMqttTopics, parseDeviceTypeMqttTopics, withDefaultDeviceTypeMqttTopics } from "@shared/types/device_type_mqtt";
+import { countDevicesByType } from "../repositories/deviceRepository";
 import { parseDevicePropertyMap, parseSavedPropertyMap } from "@shared/types/properties";
 import {
     normalizeAllDeviceTypeMqttTopicLinks,
@@ -10,17 +15,7 @@ import { parseMqttEnabled } from "../services/deviceMqttPolicy";
 
 export const DeviceTypeController = {
     list(req: any, res: any) {
-        const rows = DB.prepare(
-            `SELECT id,
-                description,
-                firmware_version,
-                created_at,
-                deviceProperties,
-                genericProperties,
-                mqttTopics,
-                mqtt_enabled
-             FROM device_types`
-        ).all();
+        const rows = listDeviceTypes();
         res.send(rows);
     },
 
@@ -29,49 +24,49 @@ export const DeviceTypeController = {
             return res.status(400).send({ error: "File too large (max 10MB)" });
         }
 
-        const { id, description, firmware_version } = req.body;
-        const firmware_build = req.file?.buffer ?? Buffer.alloc(0);
-        const normalizedFirmwareVersion = req.file
-            ? String(firmware_version || "").trim()
-            : "0.0.0";
-
-        if (!id) {
-            return res.status(400).send({ error: "Missing fields" });
+        const body = req.body || {};
+        const id = typeof body.id === "string" ? body.id.trim() : "";
+        if (!id) return res.status(400).send({ error: "Type ID is required" });
+        if (findDeviceType(id)) return res.status(409).send({ error: "Device type already exists" });
+        if (body.clone_from_type_id !== undefined && (typeof body.clone_from_type_id !== "string" || !body.clone_from_type_id.trim())) {
+            return res.status(400).send({ error: "A valid source Device Type is required" });
         }
-
-        if (req.file && !normalizedFirmwareVersion) {
-            return res.status(400).send({ error: "Firmware version is required when uploading a file" });
+        const source = body.clone_from_type_id ? findDeviceType(body.clone_from_type_id.trim()) : undefined;
+        if (body.clone_from_type_id && !source) return res.status(404).send({ error: "Source Device Type not found" });
+        const firmware = source ? getFirmware(source.id) : undefined;
+        const firmware_build = req.file?.buffer ?? firmware?.fb ?? Buffer.alloc(0);
+        const firmware_version = req.file ? String(body.firmware_version || "").trim() : firmware?.fv ?? "0.0.0";
+        if (!firmware_version) return res.status(400).send({ error: "Firmware version is required when uploading a file" });
+        let mqttEnabled = Boolean(source?.mqtt_enabled);
+        if (!source && body.mqtt_enabled !== undefined) {
+            try { mqttEnabled = parseMqttEnabled(body.mqtt_enabled); }
+            catch (error) { return res.status(400).send({ error: (error as Error).message }); }
         }
-
-        const stmt = DB.prepare(`
-            INSERT INTO device_types (
-                id,
-                firmware_version,
-                firmware_build,
-                description,
-                deviceProperties,
-                genericProperties,
-                mqttTopics
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        stmt.run(id, normalizedFirmwareVersion, firmware_build, description, "{}", "{}", "[]");
-
-        const created = DB.prepare(
-            `SELECT id,
-                description,
-                firmware_version,
-                created_at,
-                deviceProperties,
-                genericProperties,
-                mqttTopics,
-                mqtt_enabled
-             FROM device_types
-             WHERE id = ?`
-        ).get(id);
-
-        res.send(created);
+        let mqttTopics = mqttEnabled && !source ? JSON.stringify(withDefaultDeviceTypeMqttTopics([])) : "[]";
+        let widgets: DeviceDashboardWidget[] = [];
+        if (source) {
+            try {
+                const topics = parseDeviceTypeMqttTopics(source.mqttTopics).map((topic) => topic.linkedTopic?.deviceTypeId === source.id
+                    ? { ...topic, linkedTopic: { ...topic.linkedTopic, deviceTypeId: id } } : topic);
+                mqttTopics = normalizeMqttTopics(topics, id);
+                widgets = parseDeviceDashboardWidgets(loadDeviceTypeWidgets(source.id), getDeviceTypeMqttTopics(mqttTopics));
+            } catch (error) {
+                return res.status(400).send({ error: error instanceof Error ? error.message : "Invalid source Device Type configuration" });
+            }
+        }
+        try {
+            const created = db.transaction(() => {
+                insertDeviceType({ id, firmware_version, firmware_build, description: body.description ?? source?.description,
+                    deviceProperties: source?.deviceProperties ?? "{}", genericProperties: source?.genericProperties ?? "{}",
+                    mqttTopics, mqtt_enabled: mqttEnabled ? 1 : 0 });
+                if (widgets.length) replaceDeviceTypeWidgets(id, widgets, 0);
+                return findDeviceType(id)!;
+            });
+            return res.status(201).send(created);
+        } catch (error) {
+            console.error(error);
+            return res.status(500).send({ error: "Failed to create Device Type" });
+        }
     },
 
     // PUT /device-types/:id
@@ -97,16 +92,7 @@ export const DeviceTypeController = {
                 .json({ error: "Missing required fields" });
         }
 
-        const existing = DB.prepare(
-            "SELECT id, deviceProperties, genericProperties, mqttTopics FROM device_types WHERE id = ?"
-        ).get(id) as
-            | {
-                id: string;
-                deviceProperties?: string | null;
-                genericProperties?: string | null;
-                mqttTopics?: string | null;
-            }
-            | undefined;
+        const existing = findDeviceType(id);
 
         if (!existing) {
             return res
@@ -155,98 +141,60 @@ export const DeviceTypeController = {
             }
         }
 
-        const setClauses: string[] = [
-            "description = ?",
-            "firmware_version = ?",
-            "deviceProperties = ?",
-            "genericProperties = ?",
-            "mqttTopics = ?",
-        ];
-        const params: any[] = [
-            description,
-            firmware_version,
-            deviceProperties,
-            genericProperties,
-            mqttTopics,
-        ];
-
-        if (firmware_build) {
-            setClauses.push("firmware_build = ?");
-            params.push(firmware_build);
-        }
-
-        params.push(id);
-
-        const stmt = DB.prepare(
-            `UPDATE device_types
-                SET ${setClauses.join(", ")}
-                WHERE id = ?`
-        );
-
-        stmt.run(...params);
+        updateDeviceType(id, { description, firmware_version, deviceProperties, genericProperties, mqttTopics,
+            ...(firmware_build ? { firmware_build } : {}),
+        });
         normalizeAllDeviceTypeMqttTopicLinks();
         syncGeneratedMqttAclRulesForAllDevices();
         syncGeneratedMqttUserAclRulesForAllUsers();
 
-        const updated = DB.prepare(
-            `SELECT id,
-                description,
-                firmware_version,
-                deviceProperties,
-                genericProperties,
-                mqttTopics,
-                mqtt_enabled,
-                created_at
-                FROM device_types
-                WHERE id = ?`
-        ).get(id);
+        const updated = findDeviceType(id);
 
         return res.json(updated);
     },
 
     updateMqtt(req: any, res: any) {
         const id = String(req.params.id || "");
-        const existing = DB.prepare("SELECT mqttTopics FROM device_types WHERE id = ?").get(id) as
-            { mqttTopics: string | null } | undefined;
+        const existing = findDeviceType(id);
         if (!existing) return res.status(404).send({ error: "Device type not found" });
         let enabled: boolean;
         let topics: string;
         try {
             enabled = parseMqttEnabled(req.body?.mqtt_enabled);
             // Revocation must not be blocked by an incomplete, unsaved topic draft.
-            topics = enabled ? normalizeMqttTopics(req.body?.mqttTopics ?? existing.mqttTopics ?? [], id)
-                : existing.mqttTopics || "[]";
+            topics = existing.mqttTopics || "[]";
+            if (enabled) {
+                const rawTopics = req.body?.mqttTopics ?? existing.mqttTopics;
+                const draft = typeof rawTopics === "string" ? JSON.parse(rawTopics) : rawTopics;
+                if (!Array.isArray(draft)) throw new Error("mqttTopics must be an array");
+                topics = normalizeMqttTopics(!existing.mqtt_enabled ? withDefaultDeviceTypeMqttTopics(draft) : draft, id);
+            }
         } catch (error) {
             return res.status(400).send({ error: error instanceof Error ? error.message : "Invalid MQTT configuration" });
         }
-        DB.transaction(() => {
-            DB.prepare("UPDATE device_types SET mqtt_enabled = ?, mqttTopics = ? WHERE id = ?")
-                .run(enabled ? 1 : 0, topics, id);
+        db.transaction(() => {
+            updateDeviceType(id, { mqtt_enabled: enabled ? 1 : 0, mqttTopics: topics });
             normalizeAllDeviceTypeMqttTopicLinks();
             syncGeneratedMqttAclRulesForAllDevices();
             syncGeneratedMqttUserAclRulesForAllUsers();
-        })();
-        return res.send(DB.prepare(`SELECT id, description, firmware_version, created_at,
-            deviceProperties, genericProperties, mqttTopics, mqtt_enabled FROM device_types WHERE id = ?`).get(id));
+        });
+        return res.send(findDeviceType(id));
     },
 
     // DELETE /device-types/:id
     delete(req: any, res: any) {
         const { id } = req.params;
 
-        const linked = DB.prepare(
-            "SELECT COUNT(*) AS count FROM devices WHERE device_type_id = ?"
-        ).get(id) as { count: number };
+        const linked = countDevicesByType(id);
 
-        if (linked && linked.count > 0) {
+        if (linked && linked > 0) {
             return res.status(400).json({
                 error: "Cannot delete: there are devices linked to this device type",
-                devices_using_type: linked.count,
+                devices_using_type: linked,
             });
         }
 
-        const stmt = DB.prepare("DELETE FROM device_types WHERE id = ?");
-        const info = stmt.run(id);
+        const info = deleteDeviceType(id);
 
         if (info.changes === 0) {
             return res.status(400).send({ error: "Device type not found" });

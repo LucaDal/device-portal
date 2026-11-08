@@ -48,7 +48,7 @@ class _DeviceDashboardPageState extends State<DeviceDashboardPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.device.code),
+        title: Text(widget.device.name),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),

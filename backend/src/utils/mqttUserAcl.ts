@@ -2,29 +2,22 @@ import {
     MQTT_ACL_ACTIONS,
     MQTT_ACL_PERMISSION,
     MqttAclAction,
-    deviceMqttTopics,
 } from "@shared/constants/mqtt";
 import { mqttTopicMatches } from "@shared/types/mqtt";
 import {
     DeviceTypeMqttTopic,
-    getDashboardWidgetStateTopicKey,
-    parseDeviceTypeMqttTopics,
+    getDeviceTypeMqttTopics,
+    resolveMqttTopicTemplate,
 } from "@shared/types/device_type_mqtt";
-import { ROLES } from "@shared/constants/auth";
-import { DB } from "../config/database";
-import { resolveMqttTopicTemplate } from "./mqttTopicTemplate";
+import { listAccessibleMqttDevices } from "../repositories/deviceRepository";
+import { findUserById, listUserIds } from "../repositories/userRepository";
+import { findLinkedTopicTarget } from "./deviceTypeMqtt";
+import { listUserAclRules, replaceGeneratedUserAclRules } from "../repositories/mqttAclRepository";
 import { MQTT_USER_ACL_SYNCED_EVENT, mqttAclEvents } from "../services/mqttAclEvents";
-import { loadDeviceWidgets } from "../repositories/deviceWidgetRepository";
-import { ACTIVE_MQTT_DEVICE_SQL } from "../services/deviceMqttPolicy";
-import { dynsecEnabled } from "./mqttConfiguration";
+import { resolveWidgetTopic } from "@shared/widgets";
+import { loadDeviceWidgets } from "../repositories/deviceTypeWidgetRepository";
 
-type UserAclDevice = {
-    code: string;
-    device_type_id: string;
-    owner_id: number | null;
-    access_source: "owned" | "shared" | "admin";
-    mqttTopics?: string | null;
-};
+type UserAclDevice = ReturnType<typeof listAccessibleMqttDevices>[number];
 
 type UserAclRule = {
     userId: number;
@@ -35,65 +28,9 @@ type UserAclRule = {
     sourceKey: string;
 };
 
-function getUserRole(userId: number): string {
-    const row = DB.prepare("SELECT role FROM users WHERE id = ?").get(userId) as
-        | { role?: string }
-        | undefined;
-    return String(row?.role || "");
-}
-
 function getAccessibleDevicesForUser(userId: number): UserAclDevice[] {
-    const role = getUserRole(userId);
-    if (role === ROLES.ADMIN) {
-        return DB.prepare(`
-            SELECT
-                d.code,
-                d.device_type_id,
-                d.owner_id,
-                'admin' AS access_source,
-                dt.mqttTopics AS mqttTopics
-            FROM devices d
-            JOIN device_types dt ON dt.id = d.device_type_id
-            WHERE ${ACTIVE_MQTT_DEVICE_SQL}
-            ORDER BY d.code ASC
-        `).all() as UserAclDevice[];
-    }
-
-    return DB.prepare(`
-        SELECT
-            d.code,
-            d.device_type_id,
-            d.owner_id,
-            'owned' AS access_source,
-            dt.mqttTopics AS mqttTopics
-        FROM devices d
-        JOIN device_types dt ON dt.id = d.device_type_id
-        WHERE d.owner_id = ?
-          AND ${ACTIVE_MQTT_DEVICE_SQL}
-
-        UNION ALL
-
-        SELECT
-            d.code,
-            d.device_type_id,
-            d.owner_id,
-            'shared' AS access_source,
-            dt.mqttTopics AS mqttTopics
-        FROM device_shares ds
-        JOIN devices d ON d.code = ds.device_code
-        JOIN device_types dt ON dt.id = d.device_type_id
-        WHERE ds.user_id = ?
-          AND ${ACTIVE_MQTT_DEVICE_SQL}
-        ORDER BY code ASC
-    `).all(userId, userId) as UserAclDevice[];
-}
-
-function findLinkedTargetTopic(topic: DeviceTypeMqttTopic): DeviceTypeMqttTopic | undefined {
-    if (!topic.linkedTopic) return undefined;
-    const row = DB.prepare("SELECT mqttTopics FROM device_types WHERE id = ? AND mqtt_enabled = 1").get(
-        topic.linkedTopic.deviceTypeId
-    ) as { mqttTopics?: string | null } | undefined;
-    return parseDeviceTypeMqttTopics(row?.mqttTopics).find((target) => target.key === topic.linkedTopic?.topicKey);
+    const user = findUserById(userId);
+    return user ? listAccessibleMqttDevices(userId, user.role) : [];
 }
 
 function getTargetDevicesForTopic(
@@ -189,25 +126,10 @@ function buildGeneratedUserAclRules(userId: number): UserAclRule[] {
     const seen = new Set<string>();
 
     for (const device of devices) {
-        if (dynsecEnabled()) {
-            const { availability, state } = deviceMqttTopics(device.code);
-            for (const [name, topic] of Object.entries({ availability, state })) {
-                addRule(rules, seen, {
-                    userId, action: MQTT_ACL_ACTIONS.SUBSCRIBE,
-                    topicPattern: topic,
-                    source: device.access_source === "shared" ? "generated_shared_device" : "generated_owned_device",
-                    sourceDeviceCode: device.code, sourceKey: `builtin:${name}`,
-                });
-            }
-        }
-        const topics = parseDeviceTypeMqttTopics(device.mqttTopics);
-        const stateTopicKeys = new Set(
-            loadDeviceWidgets(device.code)
-                .map((widget) => getDashboardWidgetStateTopicKey(widget))
-                .filter((key): key is string => Boolean(key))
-        );
+        const topics = getDeviceTypeMqttTopics(device.mqttTopics);
+        const widgets = loadDeviceWidgets(device.code);
         for (const topic of topics) {
-            const linkedTargetTopic = findLinkedTargetTopic(topic);
+            const linkedTargetTopic = findLinkedTopicTarget(topic);
             const topicTemplate = topic.linkedTopic
                 ? linkedTargetTopic?.topic
                 : topic.topic;
@@ -227,23 +149,13 @@ function buildGeneratedUserAclRules(userId: number): UserAclRule[] {
                     seen
                 );
 
-                if (
-                    stateTopicKeys.has(topic.key) &&
-                    topic.action === MQTT_ACL_ACTIONS.SUBSCRIBE
-                ) {
-                    addUserRulesForTopic(
-                        userId,
-                        device,
-                        targetDevice,
-                        {
-                            ...topic,
-                            key: `widget_state:${topic.key}`,
-                            action: MQTT_ACL_ACTIONS.PUBLISH,
-                        },
-                        topicTemplate,
-                        rules,
-                        seen
-                    );
+                if (topic.action === MQTT_ACL_ACTIONS.SUBSCRIBE) {
+                    for (const widget of widgets) {
+                        if (widget.state?.topicKey !== topic.key) continue;
+                        addUserRulesForTopic(userId, device, targetDevice,
+                            { ...topic, key: `widget_state:${topic.key}`, action: MQTT_ACL_ACTIONS.PUBLISH },
+                            resolveWidgetTopic(widget.state, topicTemplate), rules, seen);
+                    }
                 }
             }
         }
@@ -255,40 +167,17 @@ function buildGeneratedUserAclRules(userId: number): UserAclRule[] {
 export function syncGeneratedMqttUserAclRulesForUser(userId: number) {
     const rules = buildGeneratedUserAclRules(userId);
 
-    DB.transaction(() => {
-        DB.prepare("DELETE FROM mqtt_user_acl_rules WHERE user_id = ? AND source LIKE 'generated_%'").run(userId);
-
-        const insert = DB.prepare(`
-            INSERT INTO mqtt_user_acl_rules (
-                user_id,
-                action,
-                topic_pattern,
-                permission,
-                source,
-                source_device_code,
-                source_key
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        for (const rule of rules) {
-            insert.run(
-                rule.userId,
-                rule.action,
-                rule.topicPattern,
-                MQTT_ACL_PERMISSION.ALLOW,
-                rule.source,
-                rule.sourceDeviceCode,
-                rule.sourceKey
-            );
-        }
-    })();
+    replaceGeneratedUserAclRules(userId, rules.map((rule) => ({
+        user_id: rule.userId, action: rule.action, topic_pattern: rule.topicPattern,
+        permission: MQTT_ACL_PERMISSION.ALLOW, source: rule.source,
+        source_device_code: rule.sourceDeviceCode, source_key: rule.sourceKey,
+    })));
 
     mqttAclEvents.emit(MQTT_USER_ACL_SYNCED_EVENT, userId);
 }
 
 export function syncGeneratedMqttUserAclRulesForAllUsers() {
-    const users = DB.prepare("SELECT id FROM users ORDER BY id ASC").all() as Array<{ id: number }>;
+    const users = listUserIds();
     for (const user of users) {
         syncGeneratedMqttUserAclRulesForUser(user.id);
     }
@@ -297,16 +186,7 @@ export function syncGeneratedMqttUserAclRulesForAllUsers() {
 export function canUserAccessMqttTopic(userId: number, action: MqttAclAction, topic: string): boolean {
     if (!userId || !topic) return false;
 
-    const rules = DB.prepare(`
-        SELECT action, topic_pattern, permission
-        FROM mqtt_user_acl_rules
-        WHERE user_id = ?
-        ORDER BY id ASC
-    `).all(userId) as Array<{
-        action: MqttAclAction;
-        topic_pattern: string;
-        permission: "allow" | "deny";
-    }>;
+    const rules = listUserAclRules(userId);
 
     for (const rule of rules) {
         if (rule.action !== MQTT_ACL_ACTIONS.ALL && rule.action !== action) continue;

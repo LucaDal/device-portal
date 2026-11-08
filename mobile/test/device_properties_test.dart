@@ -27,6 +27,7 @@ Map<String, dynamic> deviceJson({bool encoded = true}) {
 
   return {
     'code': 'ESP32-TEST',
+    'name': 'Living room sensor',
     'device_type_id': 'esp32',
     'activated': 1,
     'is_shared': 0,
@@ -64,6 +65,7 @@ void main() {
         ),
       ),
     );
+    expect(find.text('Living room sensor'), findsOneWidget);
     expect(find.text('Proprietà'), findsOneWidget);
     expect(find.text('Abilitato'), findsOneWidget);
     expect(find.text('Widget'), findsNothing);
@@ -76,6 +78,8 @@ void main() {
     () {
       for (final encoded in [true, false]) {
         final device = Device.fromJson(deviceJson(encoded: encoded));
+        expect(device.name, 'Living room sensor');
+        expect(device.code, 'ESP32-TEST');
         final properties = device.properties!;
 
         expect(properties.map((property) => property.key), [

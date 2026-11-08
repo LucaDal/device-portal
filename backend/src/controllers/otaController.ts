@@ -1,4 +1,4 @@
-import { DB } from "../config/database";
+import { getFirmware, updateDeviceType } from "../repositories/deviceTypeRepository";
 import crypto from "crypto";
 
 function respondWithFirmwareVersion(data: any, res: any) {
@@ -19,11 +19,7 @@ export const OtaController = {
     downloadFirmware(req: any, res: any) {
         const deviceTypeId = String(req.deviceAuth?.deviceTypeId || "");
         const deviceCode = String(req.deviceAuth?.deviceCode || "");
-        const row = DB.prepare(
-            `SELECT firmware_build fb, firmware_version fv
-             FROM device_types
-             WHERE id = ?`
-        ).get(deviceTypeId);
+        const row = getFirmware(deviceTypeId);
         if (!row) {
             return res.status(400).json({ error: "Device type not found" });
         }
@@ -59,11 +55,7 @@ export const OtaController = {
     },
     getFirmwareVersion(req: any, res: any) {
         const device_type_id = String(req.deviceAuth?.deviceTypeId || "");
-        const data = DB.prepare(
-            `SELECT firmware_version fv, firmware_build fb
-             FROM device_types
-             WHERE id = ?`
-        ).get(device_type_id);
+        const data = getFirmware(device_type_id);
         respondWithFirmwareVersion(data, res);
     },
 
@@ -76,18 +68,8 @@ export const OtaController = {
             return res.status(400).json({ error: "device type header, version or file missing" });
         }
         try {
-            const stmt = DB.prepare(`
-                UPDATE device_types
-                SET
-                    firmware_build   = @firmware_build,
-                    firmware_version = @firmware_version
-                WHERE id =  @device_id
-            `);
-
-            const result = stmt.run({
-                firmware_build: file.buffer,
-                firmware_version: version,
-                device_id: deviceTypeId,
+            const result = updateDeviceType(deviceTypeId, {
+                firmware_build: file.buffer, firmware_version: version,
             });
 
             if (result.changes === 0) {

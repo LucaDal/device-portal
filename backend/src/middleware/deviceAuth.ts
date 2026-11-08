@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import { DB } from "../config/database";
+import { findDevice, findDevicesByType } from "../repositories/deviceRepository";
 import { adminOnly } from "./adminOnly";
 import { basicAuthMiddleware } from "./basicAuth";
 import { verifyDeviceSecret } from "../utils/deviceSecrets";
@@ -47,29 +47,6 @@ function runMiddleware(
   });
 }
 
-function loadDeviceByCode(deviceCode: string) {
-  return DB.prepare(`
-    SELECT code, device_type_id, device_secret_hash
-    FROM devices
-    WHERE code = ?
-    LIMIT 1
-  `).get(deviceCode) as
-    | { code: string; device_type_id: string; device_secret_hash: string | null }
-    | undefined;
-}
-
-function loadDevicesByType(deviceTypeId: string) {
-  return DB.prepare(`
-    SELECT code, device_type_id, device_secret_hash
-    FROM devices
-    WHERE device_type_id = ?
-  `).all(deviceTypeId) as Array<{
-    code: string;
-    device_type_id: string;
-    device_secret_hash: string | null;
-  }>;
-}
-
 export function requireDeviceCodeSecret(req: Request, res: Response, next: NextFunction) {
   const deviceCode = readHeader(req, DEVICE_CODE_HEADER);
   if (!deviceCode) {
@@ -81,7 +58,7 @@ export function requireDeviceCodeSecret(req: Request, res: Response, next: NextF
     return missingHeader(res, DEVICE_SECRET_HEADER);
   }
 
-  const device = loadDeviceByCode(deviceCode);
+  const device = findDevice(deviceCode);
   if (!device?.device_secret_hash) {
     return invalidDeviceAuth(res);
   }
@@ -108,7 +85,7 @@ export function requireDeviceTypeSecret(req: Request, res: Response, next: NextF
     return missingHeader(res, DEVICE_SECRET_HEADER);
   }
 
-  const device = loadDevicesByType(deviceTypeId).find(
+  const device = findDevicesByType(deviceTypeId).find(
     (row) => row.device_secret_hash && verifyDeviceSecret(deviceSecret, row.device_secret_hash)
   );
   if (!device) {
@@ -169,7 +146,7 @@ export function requireDeviceCodeTypeSecret(req: Request, res: Response, next: N
     return missingHeader(res, DEVICE_SECRET_HEADER);
   }
 
-  const device = loadDeviceByCode(deviceCode);
+  const device = findDevice(deviceCode);
   if (!device?.device_secret_hash) {
     return invalidDeviceAuth(res);
   }

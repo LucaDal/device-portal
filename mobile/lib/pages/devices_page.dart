@@ -48,7 +48,7 @@ class _DevicesPageState extends State<DevicesPage> {
               final device = devices[index];
 
               return ListTile(
-                title: Text(device.code),
+                title: Text(device.name),
                 subtitle: Text(device.description ?? device.deviceTypeId),
                 trailing: device.isShared ? const Icon(Icons.people) : null,
                 onTap: () {

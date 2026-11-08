@@ -2,6 +2,7 @@ import 'device_property.dart';
 
 class Device {
   final String code;
+  final String name;
   final String deviceTypeId;
   final String? description;
   final bool activated;
@@ -11,6 +12,7 @@ class Device {
 
   Device({
     required this.code,
+    required this.name,
     required this.deviceTypeId,
     this.description,
     required this.activated,
@@ -22,6 +24,7 @@ class Device {
   factory Device.fromJson(Map<String, dynamic> json) {
     return Device(
       code: json['code'] as String,
+      name: json['name'] as String,
       deviceTypeId: json['device_type_id'] as String,
       description: json['device_type_description'] as String?,
       activated: (json['activated'] as int) == 1,

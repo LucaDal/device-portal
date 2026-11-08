@@ -16,7 +16,7 @@ router.post("/admin/dynsec/:deviceCode/rotate", authMiddleware, adminOnly, MqttD
 
 router.get("/admin/acl/:deviceCode", authMiddleware, adminOnly, MqttController.listAclRules);
 router.get("/stream", authMiddleware, MqttController.streamMessages);
-router.post("/session-publish", authMiddleware, MqttController.publishMessageWithSession);
+router.post("/session-publish", authMiddleware, MqttController.publishMessage);
 router.post(
     "/publish",
     deviceRequestLogger(DEVICE_REQUEST_LOG_TYPES.MQTT_API_PUBLISH),

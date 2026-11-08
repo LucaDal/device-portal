@@ -25,6 +25,7 @@ require('tsconfig-paths').register({
 });
 
 const { DB } = require('../src/config/database.ts');
+require('../src/config/bootstrap.ts').ensureAdminUser();
 const { DeviceController } = require('../src/controllers/deviceController.ts');
 const {
   encryptSensitiveDeviceProperties,
@@ -37,7 +38,7 @@ after(() => {
 
 const adminId = DB.prepare('SELECT id FROM users WHERE email = ?')
   .get(process.env.ADMIN_EMAIL).id;
-const insertUser = DB.prepare('INSERT INTO users (email, role) VALUES (?, ?)');
+const insertUser = DB.prepare("INSERT INTO users (email, role, password_hash) VALUES (?, ?, 'fixture-hash')");
 const ownerId = Number(insertUser.run('owner@example.test', 'user').lastInsertRowid);
 const sharedId = Number(insertUser.run('shared@example.test', 'user').lastInsertRowid);
 const developerId = Number(insertUser.run('developer@example.test', 'dev').lastInsertRowid);
@@ -55,13 +56,12 @@ const savedProperties = encryptSensitiveDeviceProperties({
 }, definitions);
 
 DB.prepare(`
-  INSERT INTO device_types (id, firmware_version, firmware_build, deviceProperties)
-  VALUES (?, ?, ?, ?)
-`).run('fixture-type', '1.0', Buffer.alloc(0), JSON.stringify(definitions));
+  INSERT INTO device_types (id, firmware_version, firmware_build, deviceProperties, genericProperties)
+  VALUES (?, ?, ?, ?, ?)
+`).run('fixture-type', '1.0', Buffer.alloc(0), JSON.stringify(definitions), JSON.stringify({ globalOnly: { type: 'string', value: 'type-only' } }));
 
 const insertDevice = DB.prepare(`
-  INSERT INTO devices (code, device_type_id, owner_id, device_secret_hash)
-  VALUES (?, 'fixture-type', ?, 'fixture-hash')
+  INSERT INTO devices (name, code, device_type_id, owner_id, device_secret_hash) VALUES ('Fixture device', ?, 'fixture-type', ?, 'fixture-hash')
 `);
 insertDevice.run('OWNED', ownerId);
 insertDevice.run('EMPTY', ownerId);
@@ -92,8 +92,9 @@ function assertVisibleProperties(row) {
   assert.equal(properties.enabled.value, false);
   assert.equal(properties.password.value, 'fixture-secret');
   assert.equal(properties.password.encrypted, false);
-  assert.equal(properties.hidden, undefined);
-  assert.equal(JSON.parse(row.type_deviceProperties).hidden, undefined);
+  assert.equal(properties.hidden.value, 'internal-value');
+  assert.equal(JSON.parse(row.type_deviceProperties).hidden.visible, undefined);
+  assert.deepEqual(JSON.parse(row.type_genericProperties), {});
 }
 
 test('admin reads properties of owned-by-others and unassigned devices', () => {

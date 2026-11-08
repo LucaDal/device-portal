@@ -1,9 +1,11 @@
-import { DB } from "../config/database";
+import { findDevice } from "../repositories/deviceRepository";
+import { getDynsecJob, listDynsecJobs } from "../repositories/mqttDynsecRepository";
+import { listDeviceAclRules } from "../repositories/mqttAclRepository";
 import { buildDynsecAcls, enqueueAllDynsecDevices, inspectDeviceDynsecAcls } from "../services/mqttDynsecService";
 import { dynsecEnabled } from "../utils/mqttConfiguration";
 import { getMqttDevicePassword, mqttDeviceUsername } from "../services/mqttDeviceCredentials";
 import { getDeviceMqttState } from "../services/deviceMqttPolicy";
-import { deviceMqttTopics } from "@shared/constants/mqtt";
+import { getDeviceMqttTopicMap } from "../utils/deviceTypeMqtt";
 
 export const MqttDynsecController = {
     deviceCredentials(req: any, res: any) {
@@ -19,14 +21,13 @@ export const MqttDynsecController = {
         }
         try {
             const password = getMqttDevicePassword(code);
-            const pending = DB.prepare("SELECT 1 FROM mqtt_dynsec_queue WHERE device_code = ?").get(code);
-            const topics = deviceMqttTopics(code);
+            const pending = getDynsecJob(code);
+            const topics = getDeviceMqttTopicMap(code);
             return res.send({
-                schemaVersion: 1, protocol: "mqtts", host, port,
+                schemaVersion: 2, protocol: "mqtts", host, port,
                 username: mqttDeviceUsername(code), password, clientId: code,
                 syncStatus: pending ? "pending" : "synced", keepalive: 30,
-                availabilityTopic: topics.availability,
-                stateTopic: topics.state,
+                topics,
             });
         } catch {
             return res.status(503).send({ error: "MQTT provisioning unavailable" });
@@ -34,9 +35,7 @@ export const MqttDynsecController = {
     },
 
     status(_req: any, res: any) {
-        return res.send({ enabled: dynsecEnabled(), jobs: DB.prepare(`SELECT device_code AS deviceCode,
-            revision, attempts, next_attempt_at AS nextAttemptAt, last_error AS lastError
-            FROM mqtt_dynsec_queue ORDER BY device_code`).all() });
+        return res.send({ enabled: dynsecEnabled(), jobs: listDynsecJobs() });
     },
 
     async deviceAcls(req: any, res: any) {
@@ -44,11 +43,8 @@ export const MqttDynsecController = {
         const code = String(req.params.deviceCode || "");
         const device = getDeviceMqttState(code);
         if (!device) return res.status(404).send({ error: "Device not found" });
-        const rules = DB.prepare(`SELECT action, topic_pattern, permission, priority, source, source_key
-            FROM mqtt_acl_rules WHERE device_code = ? ORDER BY priority, id`).all(code) as
-            Array<{ action: string; topic_pattern: string; permission: string; priority: number }>;
-        const job = DB.prepare(`SELECT attempts, next_attempt_at AS nextAttemptAt, last_error AS lastError
-            FROM mqtt_dynsec_queue WHERE device_code = ?`).get(code);
+        const rules = listDeviceAclRules(code);
+        const job = getDynsecJob(code);
         try {
             const expected = device.mqtt_available ? buildDynsecAcls(code, rules) : [];
             if (!dynsecEnabled()) return res.send({ enabled: false, rules, expected, applied: null, clientEnabled: null, job: null });
@@ -73,7 +69,7 @@ export const MqttDynsecController = {
     rotate(req: any, res: any) {
         if (!dynsecEnabled()) return res.status(409).send({ error: "Dynamic Security is not enabled" });
         const code = String(req.params.deviceCode || "");
-        if (!DB.prepare("SELECT 1 FROM devices WHERE code = ?").get(code)) {
+        if (!findDevice(code)) {
             return res.status(404).send({ error: "Device not found" });
         }
         if (!getDeviceMqttState(code)?.mqtt_available) return res.status(409).send({ error: "MQTT device is disabled" });

@@ -1,12 +1,14 @@
 import crypto from "crypto";
 import fs from "fs";
-import { DB } from "../config/database";
+import { deleteDeviceCredentials, enqueueDynsecDevice, enqueueAllDynsecDevices,
+    listDueDynsecJobs, completeDynsecJob, retryDynsecJob } from "../repositories/mqttDynsecRepository";
+import { listDeviceAclRules } from "../repositories/mqttAclRepository";
+export { enqueueAllDynsecDevices } from "../repositories/mqttDynsecRepository";
 import { MqttDynsecClient } from "./mqttDynsecClient";
 import { readMqttSecret } from "../utils/mqttSecrets";
 import { dynsecEnabled, dynsecConnection } from "../utils/mqttConfiguration";
 import { getMqttDevicePassword, mqttDeviceRole, mqttDeviceUsername } from "./mqttDeviceCredentials";
-import { ACTIVE_MQTT_DEVICE_SQL, getDeviceMqttState } from "./deviceMqttPolicy";
-import { deviceMqttTopics } from "@shared/constants/mqtt";
+import { getDeviceMqttState } from "./deviceMqttPolicy";
 
 export type DynsecAcl = { acltype: string; topic: string; allow: boolean; priority: number };
 type Rule = { action: string; topic_pattern: string; permission: string; priority: number };
@@ -28,12 +30,7 @@ export function buildDynsecAcls(code: string, rules: Rule[]): DynsecAcl[] {
         // Mosquitto accepts one ACL for each (type, topic); the first DB rule wins.
         if (!seen.has(key)) { result.push({ acltype, topic, allow, priority }); seen.add(key); }
     };
-    const topics = deviceMqttTopics(code);
     const ordered = [...rules].sort((a, b) => a.priority - b.priority);
-    ordered.push(
-        { action: "publish", topic_pattern: topics.telemetry, permission: "allow", priority: 99999 },
-        { action: "subscribe", topic_pattern: topics.commands, permission: "allow", priority: 99999 },
-    );
     if (ordered.length > 40000) throw new Error("Too many MQTT ACL rules");
     ordered.forEach((rule, index) => {
         if (!["publish", "subscribe", "all"].includes(rule.action) ||
@@ -57,14 +54,6 @@ export function buildDynsecAcls(code: string, rules: Rule[]): DynsecAcl[] {
 function canonicalAcls(acls: DynsecAcl[]): string {
     return JSON.stringify(acls.map(({ acltype, topic, allow, priority }) =>
         [acltype, topic, allow, priority]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
-}
-
-export function enqueueAllDynsecDevices() {
-    DB.prepare(`INSERT INTO mqtt_dynsec_queue(device_code)
-        SELECT d.code FROM devices d JOIN device_types dt ON dt.id = d.device_type_id
-        WHERE (${ACTIVE_MQTT_DEVICE_SQL}) OR EXISTS (
-            SELECT 1 FROM mqtt_device_credentials c WHERE c.device_code = d.code)
-        ON CONFLICT(device_code) DO NOTHING`).run();
 }
 
 export class MqttDynsecService {
@@ -111,7 +100,7 @@ export class MqttDynsecService {
             // Tombstones also survive a broker outage followed by API restart.
             await this.control.request({ command: "deleteClient", username }, true);
             await this.control.request({ command: "deleteRole", rolename }, true);
-            DB.prepare("DELETE FROM mqtt_device_credentials WHERE device_code = ?").run(code);
+            deleteDeviceCredentials(code);
             return;
         }
         if (!device.mqtt_available) {
@@ -120,8 +109,7 @@ export class MqttDynsecService {
         }
         try {
             const password = getMqttDevicePassword(code);
-            const rules = DB.prepare(`SELECT action, topic_pattern, permission, priority FROM mqtt_acl_rules
-                WHERE device_code = ? ORDER BY priority ASC, id ASC`).all(code) as Rule[];
+            const rules = listDeviceAclRules(code);
             await this.identity(username, rolename, password, buildDynsecAcls(code, rules), true, code);
         } catch (error) {
             await this.control.request({ command: "disableClient", username }, true);
@@ -148,11 +136,9 @@ export class MqttDynsecService {
         const reply = await this.control.request({ command: "listClients", verbose: false });
         const clients = reply.data?.clients;
         if (!Array.isArray(clients)) throw new Error("Invalid Dynamic Security client list");
-        const enqueue = DB.prepare(`INSERT INTO mqtt_dynsec_queue(device_code) VALUES (?)
-            ON CONFLICT(device_code) DO NOTHING`);
         for (const username of clients) {
             if (typeof username === "string" && username.startsWith("dp-device:")) {
-                enqueue.run(username.slice("dp-device:".length));
+                enqueueDynsecDevice(username.slice("dp-device:".length));
             }
         }
     }
@@ -166,20 +152,15 @@ export class MqttDynsecService {
                 await this.reconcileBrokerState();
                 this.lastReconcile = Date.now();
             }
-            const jobs = DB.prepare(`SELECT device_code, revision, attempts FROM mqtt_dynsec_queue
-                WHERE next_attempt_at <= ? ORDER BY next_attempt_at, device_code LIMIT 25`).all(Date.now()) as
-                Array<{ device_code: string; revision: number; attempts: number }>;
+            const jobs = listDueDynsecJobs(Date.now());
             for (const job of jobs) {
                 if (this.stopped) break;
                 try {
                     await this.syncDevice(job.device_code);
-                    DB.prepare("DELETE FROM mqtt_dynsec_queue WHERE device_code = ? AND revision = ?")
-                        .run(job.device_code, job.revision);
+                    completeDynsecJob(job.device_code, job.revision);
                 } catch {
                     const delay = Math.min(60000, 1000 * 2 ** Math.min(job.attempts, 6));
-                    DB.prepare(`UPDATE mqtt_dynsec_queue SET attempts = attempts + 1, next_attempt_at = ?,
-                        last_error = 'Broker synchronization failed; check configuration and broker availability'
-                        WHERE device_code = ? AND revision = ?`).run(Date.now() + delay, job.device_code, job.revision);
+                    retryDynsecJob(job.device_code, job.revision, Date.now() + delay);
                 }
             }
         } finally { this.running = false; }

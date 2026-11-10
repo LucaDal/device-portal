@@ -20,7 +20,6 @@ router.get("/users/invitations", authMiddleware, adminOnly, UsersController.list
 router.delete("/users/invitations/:id", authMiddleware, adminOnly, UsersController.revokeInvitation);
 router.get("/users/:id/mqtt-acl", authMiddleware, adminOnly, UsersController.listMqttUserAcl);
 router.get("/settings/mqtt", authMiddleware, adminOnly, SettingsController.getMqttBrokerSettings);
-router.put("/settings/mqtt", authMiddleware, adminOnly, SettingsController.upsertMqttBrokerSettings);
 router.get("/default-properties", authMiddleware, adminOnly, DefaultPropertiesController.list);
 router.put("/default-properties", authMiddleware, adminOnly, DefaultPropertiesController.replace);
 router.get("/request-logs", authMiddleware, allowRoles([ROLES.ADMIN, ROLES.DEV]), RequestLogsController.list);

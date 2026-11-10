@@ -48,11 +48,19 @@ Le chiamate del dispositivo a `/device` e `/ota` continuano a richiedere il secr
 
 ## Configurazione del firmware
 
+La connessione MQTT del portale è definita esclusivamente nell'ambiente del server (`MQTT_BROKER_*`).
+`GET /manage/settings/mqtt` è riservato agli amministratori e mostra solo dati diagnostici, senza
+password. Non esiste un endpoint di scrittura della connessione MQTT.
+
 `GET /device/configuration` restituisce soltanto le proprietà applicative del dispositivo e quelle globali.
-`GET /device/mqtt-credentials`, tramite HTTPS e gli stessi header `x-device-code` e `x-device-secret`,
-restituisce host, porta, credenziali e tutti i topic risolti nell'oggetto `topics` (`schemaVersion: 2`).
-L'unica chiave integrata è `topics.availability`. `telemetry` e `commands` sono generati nel catalogo
+`GET /device/mqtt-configuration`, tramite HTTPS e gli stessi header `x-device-code` e `x-device-secret`,
+restituisce host, porta, credenziali e i topic risolti in `topics.publish`, `topics.subscribe` e `topics.all` (`schemaVersion: 3`).
+Le azioni sono dal punto di vista del dispositivo. I topic bidirezionali compaiono soltanto in `all`:
+il firmware considera questo gruppo sia per pubblicare sia per sottoscriversi.
+I gruppi sono sempre presenti, anche quando vuoti, e le voci sono indicizzate dalla chiave del catalogo.
+L'unica chiave integrata è `topics.publish.availability`. `telemetry` e `commands` sono generati nel catalogo
 quando si abilita MQTT, poi modificabili dall'admin. `state` è un'eventuale voce personalizzata.
+Le proprietà applicative si gestiscono in **Device Types → Properties**; i topic in **Device Types → MQTT**.
 I filtri che terminano in `/#` richiedono un suffisso concreto per le pubblicazioni dei widget.
 Esempi e contratto firmware nella [guida MQTT](MOSQUITTO.md#firmware-esp).
 

@@ -3,11 +3,11 @@ services:
   api:
     environment:
       MQTT_DYNSEC_ENABLED: "true"
-      MQTT_DYNSEC_URL: mqtt://mosquitto:1883
+      MQTT_BROKER_URL: ${MQTT_BROKER_URL:?Set MQTT_BROKER_URL to the portal broker endpoint}
       MQTT_DYNSEC_USERNAME: dp-sync
       MQTT_DYNSEC_PASSWORD_FILE: /run/secrets/mqtt_dynsec_password
-      MQTT_DYNSEC_BACKEND_USERNAME: dp-backend
-      MQTT_DYNSEC_BACKEND_PASSWORD_FILE: /run/secrets/mqtt_backend_password
+      MQTT_BROKER_USERNAME: ${MQTT_BROKER_USERNAME:?Set MQTT_BROKER_USERNAME to the portal service account}
+      MQTT_BROKER_PASSWORD_FILE: /run/secrets/mqtt_backend_password
       MQTT_PUBLIC_HOST: ${MQTT_PUBLIC_HOST:?Set MQTT_PUBLIC_HOST to the TLS certificate hostname}
       MQTT_PUBLIC_PORT: ${MQTT_PUBLIC_PORT:-8883}
     secrets:
@@ -41,9 +41,8 @@ services:
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
-      - ${MQTT_TLS_DIR:?Set MQTT_TLS_DIR to a directory with fullchain.pem and privkey.pem}:/mosquitto/tls:ro
     ports:
-      - "${MQTT_PUBLIC_PORT:-8883}:8883"
+      - "127.0.0.1:${MQTT_PROXY_PORT:-1883}:1883"
     restart: unless-stopped
 
 volumes:

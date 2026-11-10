@@ -1,16 +1,7 @@
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "../config/database";
-import { appSettings, defaultDeviceProperties } from "../db/schema";
+import { defaultDeviceProperties } from "../db/schema";
 import type { SavedProperties } from "@shared/types/properties";
-
-export function getSetting(key: string) {
-    return db.select({ value: appSettings.value }).from(appSettings).where(eq(appSettings.key, key)).get()?.value;
-}
-
-export function saveSetting(key: string, value: string) {
-    db.insert(appSettings).values({ key, value }).onConflictDoUpdate({ target: appSettings.key,
-        set: { value, updated_at: sql`CURRENT_TIMESTAMP` } }).run();
-}
 
 export function listDefaultProperties() {
     return db.select().from(defaultDeviceProperties).orderBy(defaultDeviceProperties.key).all();

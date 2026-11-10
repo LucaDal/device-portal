@@ -97,7 +97,7 @@ nella configurazione restituita agli utenti autorizzati a modificarla.
 
 Il riscontro è un'osservazione dello stato, senza un ID di comando nel protocollo del firmware:
 non prova che proprio quella richiesta abbia causato il cambiamento. La disponibilità del canale
-realtime non prova neppure che il dispositivo sia online; vedere `topics.availability` nella guida MQTT.
+realtime non prova neppure che il dispositivo sia online; vedere `topics.publish.availability` nella guida MQTT.
 
 ## Salvare e modificare
 

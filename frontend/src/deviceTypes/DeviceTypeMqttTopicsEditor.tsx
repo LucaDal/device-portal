@@ -1,6 +1,8 @@
 import { DeviceType } from "@shared/types/device_type";
 import { DeviceTypeMqttTopic, getMqttTopicPlaceholderError, parseDeviceTypeMqttTopics, resolveMqttTopicTemplate } from "@shared/types/device_type_mqtt";
 import { MQTT_ACL_ACTIONS, MqttAclAction } from "@shared/constants/mqtt";
+import DeviceTypeOptions from "./DeviceTypeOptions";
+import AddButton from "../components/AddButton";
 
 type Props = {
     topics: DeviceTypeMqttTopic[];
@@ -24,13 +26,12 @@ export default function DeviceTypeMqttTopicsEditor({ topics, deviceTypes, device
                     <div className="dt-section-heading">
                         <h3>{title} <span className="dt-chip">{visibleRows.length}</span></h3>
                     </div>
-                    <button type="button" className="dt-btn dt-btn-primary mqtt-topic-add" onClick={() => onChange([...topics, {
+                    <AddButton onClick={() => onChange([...topics, {
                         key: "", label: "", topic: "", action: linked ? MQTT_ACL_ACTIONS.SUBSCRIBE : MQTT_ACL_ACTIONS.PUBLISH,
                         ...(linked ? { linkedTopic: { deviceTypeId: "", topicKey: "" } } : {}),
                     }])}>
-                        <span className="mqtt-topic-add-icon" aria-hidden="true">+</span>
                         {linked ? "Add linked topic" : "Add topic"}
-                    </button>
+                    </AddButton>
                 </div>
                 {visibleRows.length === 0 ? <p className="mqtt-topic-empty">{linked ? "No linked topics yet." : "No direct topics yet."}</p>
                     : <div className="dt-table-wrapper">
@@ -60,7 +61,7 @@ export default function DeviceTypeMqttTopicsEditor({ topics, deviceTypes, device
                                         <td data-label="Device type"><select aria-label={`Linked device type ${index + 1}`} value={topic.linkedTopic?.deviceTypeId || ""}
                                             onChange={(event) => update(index, { label: "", topic: "", linkedTopic: { deviceTypeId: event.target.value, topicKey: "" } })}>
                                             <option value="">Select a device type…</option>
-                                            {deviceTypes.map((type) => <option key={type.id} value={type.id}>{type.id}</option>)}
+                                            <DeviceTypeOptions deviceTypes={deviceTypes} />
                                         </select></td>
                                         <td data-label="Source topic"><select aria-label={`Linked source topic ${index + 1}`} value={topic.linkedTopic?.topicKey || ""}
                                             disabled={!topic.linkedTopic?.deviceTypeId} aria-invalid={Boolean(error)} aria-describedby={error ? errorId : undefined} onChange={(event) => {

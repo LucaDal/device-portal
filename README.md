@@ -67,6 +67,13 @@ docker compose up -d api ui
 ```
 
 Se usi Mosquitto, aggiungere `-f docker-compose.yml -f docker-compose.mosquitto.yml` dopo `docker compose` in entrambi i comandi.
+La modalità predefinita usa Nginx per il TLS MQTT e pubblica il broker soltanto su localhost.
+La connessione del portale è specificata in `.env` tramite `MQTT_BROKER_URL` e `MQTT_BROKER_USERNAME`;
+`MQTT_PUBLIC_HOST` identifica il dominio dei dispositivi. Compose monta le password come Docker secrets.
+**Settings → MQTT settings** è esclusivamente diagnostica: non esistono form né API di scrittura
+per configurare il broker, e questi valori non sono salvati nel database.
+Per il TLS diretto sul broker aggiungere anche `-f docker-compose.mosquitto-tls.yml` e impostare
+`MQTT_TLS_DIR`. Configurazione e rinnovi sono descritti nella [guida MQTT](docs/MOSQUITTO.md#avvio).
 
 ## Reverse proxy
 
@@ -88,6 +95,10 @@ location / {
 }
 ```
 
+Per MQTT Nginx usa un server TCP `stream` separato dal proxy HTTP:
+vedere [l'esempio](nginx/mqtt-stream.conf.example). Riutilizzare la gestione Certbot e il reload
+già configurati per Nginx; il certificato deve coprire anche il dominio pubblico MQTT.
+
 ## Uso
 
 1. Accedere come admin e invitare gli utenti; al primo accesso devono cambiare password.
@@ -106,8 +117,9 @@ Ogni tipo di widget ha un proprio oggetto e una validazione condivisa; vedere la
 L'unico topic integrato è `availability`. Abilitando MQTT si generano `telemetry` e `commands` nel catalogo modificabile; `state` è facoltativo e definito dall'admin.
 I widget su un topic che termina in `/#` richiedono un suffisso e mostrano il topic concreto risultante.
 Gli indicatori della dashboard e dei dispositivi usano `online`/`offline` da `availability`; sono assenti quando MQTT è disabilitato.
-Il provisioning MQTT v2 raccoglie tutti i topic in `topics`; `/device/configuration` contiene solo proprietà applicative. Aggiornare il firmware al [nuovo formato](docs/MOSQUITTO.md#firmware-esp).
-La CA MQTT è facoltativa: TLS usa le CA di sistema, una CA privata oppure la verifica disabilitata esplicitamente.
+La configurazione MQTT v3, disponibile in `/device/mqtt-configuration`, raggruppa i topic in `topics.publish`, `topics.subscribe` e `topics.all`, senza duplicazioni; `/device/configuration` contiene solo proprietà applicative. Le azioni sono dal punto di vista del dispositivo; `all` contiene i topic bidirezionali. Aggiornare il firmware al [nuovo formato](docs/MOSQUITTO.md#firmware-esp).
+La CA MQTT è facoltativa: TLS usa le CA di sistema oppure una CA privata specificata in `.env`.
+La verifica del certificato server è sempre attiva.
 
 ## API essenziali
 
@@ -126,7 +138,7 @@ Il proxy aggiunge `/api` ai percorsi. Il web usa cookie HttpOnly con sessione di
 | Widget / azione | `GET /devices/:code/widgets`, `POST /devices/:code/widgets/:widgetId/action` |
 | Aggiornamenti realtime | `GET /mqtt/stream` |
 | Configurazione device | `GET /device/configuration` con `x-device-code`, `x-device-secret` |
-| Credenziali MQTT device | `GET /device/mqtt-credentials` via HTTPS con `x-device-code`, `x-device-secret` |
+| Configurazione MQTT device | `GET /device/mqtt-configuration` via HTTPS con `x-device-code`, `x-device-secret` |
 | Firmware OTA | `GET /ota/firmware` con gli stessi header più `x-device-type-id` |
 | Versione firmware | `GET /ota/firmware/version` con `x-device-type-id` e `x-device-secret` |
 | Upload firmware admin | `PUT /ota/firmware`, Basic Auth admin, `x-device-type-id`, campi `file` e `version` |

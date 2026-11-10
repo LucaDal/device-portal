@@ -37,6 +37,7 @@ pids/
 .env.*
 !.env.example
 secrets/
+/certs/
 /.aws/
 
 # Configurazione degli editor

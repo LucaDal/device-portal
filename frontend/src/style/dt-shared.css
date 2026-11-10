@@ -209,6 +209,26 @@
     border-color: #3b82f6;
 }
 
+.dt-btn.dt-btn-primary.dt-btn-add {
+    gap: 0.5rem;
+    padding: 0.45rem 0.85rem 0.45rem 0.5rem;
+    border-color: #60a5fa;
+    background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    box-shadow: 0 3px 10px rgba(37, 99, 235, 0.18);
+    white-space: nowrap;
+}
+
+.dt-btn-add-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.16);
+    font-size: 1.2rem;
+    line-height: 1;
+}
+
 .dt-btn-outline {
     background-color: transparent;
     border-color: #4b5563;

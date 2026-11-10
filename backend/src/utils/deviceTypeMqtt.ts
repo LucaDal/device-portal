@@ -1,6 +1,7 @@
 import { MQTT_ACL_ACTIONS, MQTT_ACL_PERMISSION } from "@shared/constants/mqtt";
 import {
     DeviceTypeMqttTopic,
+    DeviceMqttTopics,
     getDeviceTypeMqttTopics,
     resolveMqttTopicTemplate,
     parseDeviceTypeMqttTopics,
@@ -116,8 +117,15 @@ export function resolveDeviceTypeMqttTopicsForDevice(deviceCode: string): Resolv
         .filter((topic): topic is ResolvedDeviceTypeMqttTopic => Boolean(topic?.resolvedTopic));
 }
 
-export function getDeviceMqttTopicMap(deviceCode: string): Record<string, string> {
-    return Object.fromEntries(resolveDeviceTypeMqttTopicsForDevice(deviceCode).map((topic) => [topic.key, topic.resolvedTopic]));
+export function getDeviceMqttTopicsByAction(deviceCode: string): DeviceMqttTopics {
+    const topics = resolveDeviceTypeMqttTopicsForDevice(deviceCode);
+    const groups: DeviceMqttTopics = { publish: {}, subscribe: {}, all: {} };
+    for (const action of Object.values(MQTT_ACL_ACTIONS)) {
+        groups[action] = Object.fromEntries(topics
+            .filter((topic) => topic.action === action)
+            .map((topic) => [topic.key, topic.resolvedTopic]));
+    }
+    return groups;
 }
 
 export function syncGeneratedMqttAclRulesForDevice(deviceCode: string) {

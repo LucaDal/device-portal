@@ -15,6 +15,7 @@ import {
     setDeviceMqttEnabled,
 } from "../devices/deviceService";
 import { DeviceType } from "@shared/types/device_type";
+import DeviceTypeOptions from "../deviceTypes/DeviceTypeOptions";
 import {
     DEVICE_NAME_MAX_LENGTH,
     DeviceShareInvitationRow,
@@ -517,11 +518,7 @@ const DevicesPage: React.FC = () => {
                                     onChange={(e) => setDeviceTypeId(e.target.value ? String(e.target.value) : "")}
                                 >
                                     <option value="">Select...</option>
-                                    {deviceTypes.map((dt) => (
-                                        <option key={dt.id} value={dt.id}>
-                                            #{dt.id} - {dt.description} (FW {dt.firmware_version})
-                                        </option>
-                                    ))}
+                                    <DeviceTypeOptions deviceTypes={deviceTypes} />
                                 </select>
                             </div>
 

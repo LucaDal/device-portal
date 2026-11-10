@@ -1,11 +1,12 @@
-export interface MqttBrokerSettings {
+export interface MqttEndpoint {
     host: string;
     port: number;
     protocol: "mqtt" | "mqtts";
+}
+
+export interface MqttBrokerSettings extends MqttEndpoint {
     username: string;
     password: string;
-    clientIdPrefix: string;
-    allowInsecureTls: boolean;
     caFile: string;
     clientCertFile: string;
     clientKeyFile: string;
@@ -16,15 +17,9 @@ export interface MqttPublishInput {
     content: Record<string, unknown> | unknown[];
 }
 
-export const DEFAULT_MQTT_BROKER_SETTINGS: MqttBrokerSettings = {
-    host: "", port: 1883, protocol: "mqtt", username: "", password: "",
-    clientIdPrefix: "device-portal-api", allowInsecureTls: false,
-    caFile: "", clientCertFile: "", clientKeyFile: "",
-};
-
-export interface MqttBrokerSettingsView extends Omit<MqttBrokerSettings, "password"> {
+export interface MqttBrokerSettingsView {
+    connection: Omit<MqttBrokerSettings, "password"> | null;
     passwordSet: boolean;
-    passwordError?: string;
-    managed: boolean;
-    mode: "dynamic-security" | "standalone";
+    dynamicSecurity: boolean;
+    publicEndpoint: MqttEndpoint | null;
 }

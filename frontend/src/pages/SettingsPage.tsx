@@ -73,7 +73,7 @@ export default function SettingsPage() {
                 </p>
                 <div className="settings-role-chips">
                     <span className="dt-chip">Visible to all signed-in users</span>
-                    {isAdmin && <span className="dt-chip">Admin-only broker controls</span>}
+                    {isAdmin && <span className="dt-chip">Admin-only MQTT diagnostics</span>}
                 </div>
             </header>
             <div className="dt-tabs single-page-tabs" aria-label="Settings sections">
@@ -85,7 +85,7 @@ export default function SettingsPage() {
                 {isAdmin && <button type="button" className={`dt-btn settings-tab ${activeTab === "mqtt" ? "dt-btn-primary" : "dt-btn-outline"}`}
                     aria-pressed={activeTab === "mqtt"} onClick={() => setActiveTab("mqtt")}>
                     <span className="settings-tab-title">MQTT settings</span>
-                    <span className="settings-tab-copy">Configure broker, TLS, and client identity.</span>
+                    <span className="settings-tab-copy">View broker configuration and connection details.</span>
                 </button>}
             </div>
             {(activeTab === "password" || !isAdmin) && (

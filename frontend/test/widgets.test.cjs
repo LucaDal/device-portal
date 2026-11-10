@@ -14,6 +14,7 @@ const Value = require('../src/widgets/ValueWidget.tsx').default;
 const Input = require('../src/widgets/InputWidget.tsx').default;
 const Button = require('../src/widgets/ButtonWidget.tsx').default;
 const Editor = require('../src/widgets/WidgetDefinitionEditor.tsx').default;
+const AddButton = require('../src/components/AddButton.tsx').default;
 const service = require('../src/devices/deviceService.ts');
 function treeNodes(node) {
   if (!React.isValidElement(node)) return [];
@@ -88,8 +89,10 @@ test('availability uses MQTT data, handles missing connectivity, and disappears 
 test('global properties stay in the type while every non-global property is listed without visibility flags', () => {
   const { buildPropertyRows } = require('../src/devices/deviceProperties.ts');
   const { parseDeviceTypePropertiesForm, buildDeviceTypePropertiesPayload } = require('../src/deviceTypes/deviceTypeProperties.ts');
-  const type = { deviceProperties: { local: { type: 'string', visible: false, defaultValue: 'default' } }, genericProperties: { globalValue: { type: 'int', global: true, value: 12 } } };
+  const type = { deviceProperties: { local: { type: 'string', visible: false, defaultValue: 'default' } }, genericProperties: { globalValue: { type: 'int', global: true, value: 12 } },
+    mqttTopics: [{ key: 'commands', topic: 'devices/{deviceCode}/commands/#', action: 'subscribe' }] };
   const form = parseDeviceTypePropertiesForm(type);
+  assert.deepEqual(Object.keys(form), ['properties']);
   const payload = buildDeviceTypePropertiesPayload(form.properties);
   assert.equal(payload.ok, true);
   assert.equal(payload.deviceProperties.local.visible, undefined);
@@ -150,13 +153,13 @@ test('MQTT row edits and deletion retain original indexes, and an empty linked r
   assert.deepEqual(topics.map(topic => topic.key), ['linked', 'last']);
   view().find(node => node.props['aria-label'] === 'Linked device type 1').props.onChange({ target: { value: '' } });
   assert.deepEqual(topics[0].linkedTopic, { deviceTypeId: '', topicKey: '' });
-  view().find(node => node.type === 'button' && React.Children.toArray(node.props.children).includes('Add linked topic')).props.onClick();
+  view().find(node => node.type === AddButton && node.props.children === 'Add linked topic').props.onClick();
   assert.deepEqual(topics[2].linkedTopic, { deviceTypeId: '', topicKey: '' });
   view().find(node => node.props['aria-label'] === 'Linked device type 3').props.onChange({ target: { value: 'source' } });
   view().find(node => node.props['aria-label'] === 'Linked source topic 3').props.onChange({ target: { value: 'reading' } });
   assert.equal(topics[2].key, 'reading');
   assert.equal(topics[2].topic, 'owners/{ownerId}/reading');
-  view().find(node => node.type === 'button' && React.Children.toArray(node.props.children).includes('Add topic')).props.onClick();
+  view().find(node => node.type === AddButton && node.props.children === 'Add topic').props.onClick();
   assert.equal(topics[3].linkedTopic, undefined);
 });
 
@@ -224,3 +227,21 @@ test('shared ACL cards preserve rule metadata and copying while hiding full topi
   assert.equal(copied, topic);
 });
 
+
+test('device type options have explicit labels and plain text even without a description', () => {
+  const Options = require('../src/deviceTypes/DeviceTypeOptions.tsx').default;
+  const deviceTypes = [
+    { id: 'TEST_ESP8266', description: 'primo test con esp8266', firmware_version: '0.0.0' },
+    { id: 'relay', description: '   ', firmware_version: '1.0.0' },
+    { id: 'sensor', firmware_version: '1.0.0' },
+  ];
+  const options = Options({ deviceTypes });
+  assert.deepEqual(options.map(option => option.props.label), ['TEST_ESP8266 — primo test con esp8266', 'relay', 'sensor']);
+  for (const [index, option] of options.entries()) {
+    assert.equal(option.props.value, deviceTypes[index].id);
+    assert.equal(option.props.children, option.props.label);
+    assert.equal(typeof option.props.children, 'string');
+  }
+  const html = renderToStaticMarkup(React.createElement('select', { defaultValue: 'relay' }, React.createElement(Options, { deviceTypes })));
+  assert.match(html, /value="relay" label="relay" selected="">relay<\/option>/);
+});

@@ -7,7 +7,7 @@ import { getUserSession } from "../repositories/userRepository";
 import { listReadableTopicPatterns } from "../repositories/mqttAclRepository";
 import { brokerClientOptions, loadBrokerSettings } from "../utils/mqttBrokerSettings";
 import { canUserAccessMqttTopic } from "../utils/mqttUserAcl";
-import { MQTT_USER_ACL_SYNCED_EVENT, MQTT_BROKER_SETTINGS_CHANGED_EVENT, mqttAclEvents } from "./mqttAclEvents";
+import { MQTT_USER_ACL_SYNCED_EVENT, mqttAclEvents } from "./mqttAclEvents";
 
 type MqttStreamMessage = {
     topic: string;
@@ -298,17 +298,6 @@ function refreshUserClientTopics(userId: number) {
 
 mqttAclEvents.on(MQTT_USER_ACL_SYNCED_EVENT, (userId: number) => {
     refreshUserClientTopics(Number(userId));
-});
-
-mqttAclEvents.on(MQTT_BROKER_SETTINGS_CHANGED_EVENT, () => {
-    broadcastServiceError("MQTT settings changed; reconnecting");
-    cachedMessages.clear();
-    cachedBytes = 0;
-    for (const client of clients.values()) client.pending.clear();
-    subscriberGeneration += 1;
-    stopSubscriber();
-    activeTopicKey = "";
-    scheduleSubscriberRefresh();
 });
 
 export function registerMqttSseClient(userId: number, req: Request, res: Response) {

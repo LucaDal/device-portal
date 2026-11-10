@@ -34,7 +34,11 @@ const firmware = Buffer.from('test-firmware');
 const insertType = DB.prepare(`INSERT INTO device_types(id, firmware_version, firmware_build, mqtt_enabled, genericProperties, mqttTopics)
   VALUES (?, '1.0', ?, 1, ?, ?)`);
 insertType.run('sensor', firmware, JSON.stringify({ mode: { type: 'string', value: 'default' } }),
-  JSON.stringify([{ key: 'telemetry', action: 'publish', topic: 'devices/{deviceCode}/telemetry/state' }]));
+  JSON.stringify([
+    { key: 'telemetry', action: 'publish', topic: 'devices/{deviceCode}/telemetry/state' },
+    { key: 'commands', action: 'subscribe', topic: 'devices/{deviceCode}/commands/#' },
+    { key: 'shared', action: 'all', topic: 'owners/{ownerId}/{deviceTypeId}/shared' },
+  ]));
 insertType.run('other', firmware, '{}', '[]');
 const insertDevice = DB.prepare(`INSERT INTO devices (name, code, device_type_id, owner_id, activated, device_secret_hash) VALUES ('Fixture device', ?, ?, ?, 1, ?)`);
 insertDevice.run('A', 'sensor', owner, createHash('sha256').update(deviceSecret).digest('hex'));
@@ -89,7 +93,7 @@ test('device configuration requires the device secret and returns uncached prope
 });
 
 test('MQTT provisioning keeps device authentication, HTTPS and availability checks', async () => {
-  const endpoint = baseUrl + '/device/mqtt-credentials';
+  const endpoint = baseUrl + '/device/mqtt-configuration';
   assert.equal((await fetch(endpoint)).status, 401);
   assert.equal((await fetch(endpoint, { headers })).status, 403);
   const secure = { ...headers, 'x-forwarded-proto': 'https' };
@@ -100,8 +104,15 @@ test('MQTT provisioning keeps device authentication, HTTPS and availability chec
   assert.equal(credentials.username, 'dp-device:A');
   assert.equal(credentials.host, 'mqtt.example.test');
   assert.ok(credentials.password);
-  assert.equal(credentials.schemaVersion, 2);
-  assert.deepEqual(credentials.topics, { availability: 'devices/A/telemetry/availability', telemetry: 'devices/A/telemetry/state' });
+  assert.equal(credentials.schemaVersion, 3);
+  assert.deepEqual(credentials.topics, {
+    publish: { availability: 'devices/A/telemetry/availability', telemetry: 'devices/A/telemetry/state' },
+    subscribe: { commands: 'devices/A/commands/#' },
+    all: { shared: `owners/${owner}/sensor/shared` },
+  });
+  const other = await fetch(endpoint, { headers: { 'x-device-code': 'B', 'x-device-secret': otherSecret, 'x-forwarded-proto': 'https' } });
+  assert.equal(other.status, 200);
+  assert.deepEqual((await other.json()).topics, { publish: { availability: 'devices/B/telemetry/availability' }, subscribe: {}, all: {} });
   DB.prepare("UPDATE devices SET mqtt_enabled = 0 WHERE code = 'A'").run();
   try { assert.equal((await fetch(endpoint, { headers: secure })).status, 403); }
   finally { DB.prepare("UPDATE devices SET mqtt_enabled = 1 WHERE code = 'A'").run(); }

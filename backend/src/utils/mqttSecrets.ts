@@ -1,10 +1,10 @@
 import fs from "fs";
 import crypto from "crypto";
 
-export function readMqttSecret(name: string): string {
+export function readMqttSecret(name: string, minimumLength = 32): string {
     const file = process.env[`${name}_FILE`];
     const value = file ? fs.readFileSync(file, "utf8").trim() : String(process.env[name] || "");
-    if (value.length < 32) throw new Error(`${name} must contain at least 32 characters`);
+    if (value.length < minimumLength) throw new Error(`${name} must contain at least ${minimumLength} characters`);
     return value;
 }
 

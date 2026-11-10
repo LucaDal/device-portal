@@ -1,0 +1,9 @@
+# Optional overlay after docker-compose.mosquitto.yml: TLS directly on the broker.
+services:
+  mosquitto:
+    volumes:
+      - ./mosquitto/tls.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/base/mosquitto.conf:ro
+      - ${MQTT_TLS_DIR:?Set MQTT_TLS_DIR to a directory with fullchain.pem and privkey.pem}:/mosquitto/tls:ro
+    ports: !override
+      - "${MQTT_PUBLIC_PORT:-8883}:8883"

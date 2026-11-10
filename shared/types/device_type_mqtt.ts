@@ -11,6 +11,12 @@ export interface DeviceTypeMqttTopic {
     };
 }
 
+export type DeviceMqttTopics = {
+    publish: Record<string, string>;
+    subscribe: Record<string, string>;
+    all: Record<string, string>;
+};
+
 export function normalizeMqttTopicPath(value: string): string {
     return String(value || "")
         .trim()

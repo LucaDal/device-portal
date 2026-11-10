@@ -1,12 +1,12 @@
 import crypto from "crypto";
-import fs from "fs";
 import { deleteDeviceCredentials, enqueueDynsecDevice, enqueueAllDynsecDevices,
     listDueDynsecJobs, completeDynsecJob, retryDynsecJob } from "../repositories/mqttDynsecRepository";
 import { listDeviceAclRules } from "../repositories/mqttAclRepository";
 export { enqueueAllDynsecDevices } from "../repositories/mqttDynsecRepository";
 import { MqttDynsecClient } from "./mqttDynsecClient";
 import { readMqttSecret } from "../utils/mqttSecrets";
-import { dynsecEnabled, dynsecConnection } from "../utils/mqttConfiguration";
+import { dynsecEnabled, mqttBrokerConnection } from "../utils/mqttConfiguration";
+import { brokerClientOptions } from "../utils/mqttBrokerSettings";
 import { getMqttDevicePassword, mqttDeviceRole, mqttDeviceUsername } from "./mqttDeviceCredentials";
 import { getDeviceMqttState } from "./deviceMqttPolicy";
 
@@ -118,8 +118,11 @@ export class MqttDynsecService {
     }
 
     async syncBackend() {
-        const { backendUsername: username, controlUsername } = dynsecConnection();
-        if (username.startsWith("dp-device:") || username === controlUsername) {
+        const connection = mqttBrokerConnection();
+        if (!connection) throw new Error("MQTT_BROKER_URL is required for Dynamic Security");
+        const username = connection.username;
+        const controlUsername = process.env.MQTT_DYNSEC_USERNAME || "dp-sync";
+        if (!username || username.startsWith("dp-device:") || username === controlUsername) {
             throw new Error("Backend and control MQTT accounts must be distinct");
         }
         const acls = systemTopicDenials();
@@ -127,7 +130,7 @@ export class MqttDynsecService {
             acls.push({ acltype: type, topic: "#", allow: true, priority: 1 });
         }
         acls.push({ acltype: "unsubscribePattern", topic: "#", allow: true, priority: 0 });
-        await this.identity(username, "dp-backend", readMqttSecret("MQTT_DYNSEC_BACKEND_PASSWORD"), acls, true);
+        await this.identity(username, "dp-backend", readMqttSecret("MQTT_BROKER_PASSWORD"), acls, true);
     }
 
     async reconcileBrokerState() {
@@ -186,12 +189,13 @@ export class MqttDynsecService {
 }
 
 function createControlClient(): MqttDynsecClient {
-    const { url, caFile, controlUsername } = dynsecConnection();
-    return new MqttDynsecClient(url, {
-        username: controlUsername,
+    const connection = mqttBrokerConnection();
+    if (!connection) throw new Error("MQTT_BROKER_URL is required for Dynamic Security");
+    return new MqttDynsecClient(connection.url, brokerClientOptions({
+        ...connection,
+        username: process.env.MQTT_DYNSEC_USERNAME || "dp-sync",
         password: readMqttSecret("MQTT_DYNSEC_PASSWORD"),
-        ...(caFile ? { ca: fs.readFileSync(caFile) } : {}),
-    });
+    }));
 }
 
 export async function inspectDeviceDynsecAcls(code: string) {

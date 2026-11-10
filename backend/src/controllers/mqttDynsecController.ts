@@ -2,29 +2,28 @@ import { findDevice } from "../repositories/deviceRepository";
 import { getDynsecJob, listDynsecJobs } from "../repositories/mqttDynsecRepository";
 import { listDeviceAclRules } from "../repositories/mqttAclRepository";
 import { buildDynsecAcls, enqueueAllDynsecDevices, inspectDeviceDynsecAcls } from "../services/mqttDynsecService";
-import { dynsecEnabled } from "../utils/mqttConfiguration";
+import { dynsecEnabled, getPublicMqttEndpoint } from "../utils/mqttConfiguration";
 import { getMqttDevicePassword, mqttDeviceUsername } from "../services/mqttDeviceCredentials";
 import { getDeviceMqttState } from "../services/deviceMqttPolicy";
-import { getDeviceMqttTopicMap } from "../utils/deviceTypeMqtt";
+import { getDeviceMqttTopicsByAction } from "../utils/deviceTypeMqtt";
 
 export const MqttDynsecController = {
-    deviceCredentials(req: any, res: any) {
+    deviceConfiguration(req: any, res: any) {
         res.setHeader("Cache-Control", "no-store");
         if (!dynsecEnabled()) return res.status(404).send({ error: "Dynamic Security is not enabled" });
         if (!req.secure) return res.status(403).send({ error: "HTTPS is required for MQTT provisioning" });
         const code = String(req.deviceAuth?.deviceCode || "");
         if (!getDeviceMqttState(code)?.mqtt_available) return res.status(403).send({ error: "MQTT device is disabled" });
-        const host = String(process.env.MQTT_PUBLIC_HOST || "").trim();
-        const port = Number(process.env.MQTT_PUBLIC_PORT || 8883);
-        if (!host || /[\s/]/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) {
+        const endpoint = getPublicMqttEndpoint();
+        if (!endpoint) {
             return res.status(503).send({ error: "Public MQTT endpoint is not configured" });
         }
         try {
             const password = getMqttDevicePassword(code);
             const pending = getDynsecJob(code);
-            const topics = getDeviceMqttTopicMap(code);
+            const topics = getDeviceMqttTopicsByAction(code);
             return res.send({
-                schemaVersion: 2, protocol: "mqtts", host, port,
+                schemaVersion: 3, ...endpoint,
                 username: mqttDeviceUsername(code), password, clientId: code,
                 syncStatus: pending ? "pending" : "synced", keepalive: 30,
                 topics,

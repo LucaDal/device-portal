@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, FormEvent, ChangeEvent } from "react";
 import { DeviceType } from "@shared/types/device_type";
 import { PropertyType, parseSavedPropertyMap } from "@shared/types/properties";
-import { DeviceTypeMqttTopic, getMqttTopicPlaceholderError, withDefaultDeviceTypeMqttTopics } from "@shared/types/device_type_mqtt";
+import { DeviceTypeMqttTopic, getMqttTopicPlaceholderError, parseDeviceTypeMqttTopics, withDefaultDeviceTypeMqttTopics } from "@shared/types/device_type_mqtt";
 import { MQTT_AVAILABILITY_TOPIC } from "@shared/constants/mqtt";
 import { getDeviceTypes, updateDeviceType } from "../devices/deviceService";
 import { getDefaultProperties } from "../admin/adminService";
@@ -9,11 +9,12 @@ import {
     DeviceTypePropertyEditorRow,
     buildDeviceTypePropertiesPayload,
     parseDeviceTypePropertiesForm,
-    parseMqttTopics,
 } from "../deviceTypes/deviceTypeProperties";
 import MqttTopicInfo from "../deviceTypes/MqttTopicInfo";
 import DeviceTypeMqttTopicsEditor from "../deviceTypes/DeviceTypeMqttTopicsEditor";
 import DeviceTypeWidgetsEditor from "../deviceTypes/DeviceTypeWidgetsEditor";
+import DeviceTypeOptions from "../deviceTypes/DeviceTypeOptions";
+import AddButton from "../components/AddButton";
 import ErrorBanner from "../components/ErrorBanner";
 import { apiFetchWithAuth } from "../api/apiClient";
 import "../style/DeviceTypesPage.css";
@@ -44,7 +45,7 @@ const DeviceTypesPage: React.FC = () => {
     const [propertyRows, setPropertyRows] = useState<DeviceTypePropertyEditorRow[]>([]);
     const [mqttTopics, setMqttTopics] = useState<DeviceTypeMqttTopic[]>([]);
     const [mqttEnabled, setMqttEnabled] = useState(false);
-    const [propertiesLoadedTypeId, setPropertiesLoadedTypeId] = useState("");
+    const [loadedTypeId, setLoadedTypeId] = useState("");
 
     const [submitting, setSubmitting] = useState(false);
     const firmwareInputRef = useRef<HTMLInputElement | null>(null);
@@ -90,7 +91,7 @@ const DeviceTypesPage: React.FC = () => {
             );
             if (selectedTypeId && !data.some((d) => d.id === selectedTypeId)) {
                 setSelectedTypeId("");
-                setPropertiesLoadedTypeId("");
+                setLoadedTypeId("");
             }
         } catch (err: any) {
             setError(err.error || "Unexpected error");
@@ -125,21 +126,21 @@ const DeviceTypesPage: React.FC = () => {
         }
     };
 
-    const loadPropertiesFields = (device: DeviceType) => {
+    const loadTypeConfiguration = (device: DeviceType) => {
         const formState = parseDeviceTypePropertiesForm(device);
         setPropertyRows(formState.properties);
-        setMqttTopics(formState.mqttTopics);
+        setMqttTopics(parseDeviceTypeMqttTopics(device.mqttTopics));
         setMqttEnabled(Boolean(device.mqtt_enabled));
-        setPropertiesLoadedTypeId(device.id);
+        setLoadedTypeId(device.id);
     };
 
     useEffect(() => {
         if ((activeTab !== "properties" && activeTab !== "mqtt") || !selectedType) return;
-        if (propertiesLoadedTypeId === selectedType.id) return;
+        if (loadedTypeId === selectedType.id) return;
 
         loadEditFields(selectedType);
-        loadPropertiesFields(selectedType);
-    }, [activeTab, selectedType, propertiesLoadedTypeId]);
+        loadTypeConfiguration(selectedType);
+    }, [activeTab, selectedType, loadedTypeId]);
 
     const validateFirmwareVersion = (value: string): string | null => {
         const trimmed = value.trim();
@@ -247,7 +248,7 @@ const DeviceTypesPage: React.FC = () => {
     const handlePropertiesAction = (device: DeviceType) => {
         setSelectedTypeId(device.id);
         loadEditFields(device);
-        loadPropertiesFields(device);
+        loadTypeConfiguration(device);
         setActiveTab("properties");
         setError(null);
         setSuccessMessage(null);
@@ -257,13 +258,13 @@ const DeviceTypesPage: React.FC = () => {
         setSelectedTypeId(value);
         const device = deviceTypes.find((d) => d.id === value);
         if (!device) {
-            setPropertiesLoadedTypeId("");
+            setLoadedTypeId("");
             return;
         }
 
         if (activeTab === "properties" || activeTab === "mqtt") {
             loadEditFields(device);
-            loadPropertiesFields(device);
+            loadTypeConfiguration(device);
         }
     };
 
@@ -386,7 +387,7 @@ const DeviceTypesPage: React.FC = () => {
             setSubmitting(true);
 
             const formData = new FormData();
-            const propertiesAreLoaded = propertiesLoadedTypeId === selectedType.id;
+            const propertiesAreLoaded = loadedTypeId === selectedType.id;
             const propertiesForSubmit = propertiesAreLoaded
                 ? propertyRows
                 : parseDeviceTypePropertiesForm(selectedType).properties;
@@ -409,7 +410,7 @@ const DeviceTypesPage: React.FC = () => {
             const updated = await response.json().catch(() => null) as DeviceType | null;
             if (updated) {
                 loadEditFields(updated);
-                loadPropertiesFields(updated);
+                loadTypeConfiguration(updated);
             }
 
             setSuccessMessage("Properties updated successfully.");
@@ -435,7 +436,7 @@ const DeviceTypesPage: React.FC = () => {
             );
             setDeviceTypes((types) => types.map((type) => type.id === updated.id ? updated : type));
             setMqttEnabled(Boolean(updated.mqtt_enabled));
-            setMqttTopics(parseMqttTopics(updated.mqttTopics));
+            setMqttTopics(parseDeviceTypeMqttTopics(updated.mqttTopics));
             setSuccessMessage("MQTT configuration saved.");
         } catch (failure: any) {
             setError(failure?.error || "Could not save MQTT configuration.");
@@ -567,7 +568,7 @@ const DeviceTypesPage: React.FC = () => {
                                 if (firmwareInputRef.current) firmwareInputRef.current.value = "";
                             }}>
                                 <option value="">Create an empty Device Type</option>
-                                {deviceTypes.map((type) => <option key={type.id} value={type.id}>{type.id} — {type.description || ""}</option>)}
+                                <DeviceTypeOptions deviceTypes={deviceTypes} />
                             </select>
                             <small className="dt-help-text">Copies properties, firmware, MQTT configuration and widgets into an independent type. Enter a new Type ID.</small>
                         </div>
@@ -668,11 +669,7 @@ const DeviceTypesPage: React.FC = () => {
                                 onChange={(e) => handleSelectedTypeChange(e.target.value)}
                             >
                                 <option value="">Select...</option>
-                                {deviceTypes.map((dt) => (
-                                    <option key={dt.id} value={dt.id}>
-                                        {dt.id} - {dt.description || "No description"}
-                                    </option>
-                                ))}
+                                <DeviceTypeOptions deviceTypes={deviceTypes} />
                             </select>
                         </div>
 
@@ -861,28 +858,9 @@ const DeviceTypesPage: React.FC = () => {
                                     ))}
 
                                     <div className="dt-actions">
-                                        <span className="dt-action-prefix">Add:</span>
-                                        <button
-                                            type="button"
-                                            className="dt-btn dt-btn-xs dt-btn-outline"
-                                            onClick={() => handleAddProperty(false)}
-                                        >
-                                            Device property
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="dt-btn dt-btn-xs dt-btn-outline"
-                                            onClick={() => handleAddProperty(true)}
-                                        >
-                                            Global property
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="dt-btn dt-btn-xs dt-btn-outline"
-                                            onClick={handleOpenDefaultPropertiesPicker}
-                                        >
-                                            Catalog property
-                                        </button>
+                                        <AddButton onClick={() => handleAddProperty(false)}>Add device property</AddButton>
+                                        <AddButton onClick={() => handleAddProperty(true)}>Add global property</AddButton>
+                                        <AddButton onClick={handleOpenDefaultPropertiesPicker}>Add catalog property</AddButton>
                                     </div>
                                 </div>
 
@@ -913,7 +891,7 @@ const DeviceTypesPage: React.FC = () => {
                             <select id="mqtt-type-select" value={selectedTypeId}
                                 onChange={(event) => handleSelectedTypeChange(event.target.value)}>
                                 <option value="">Select…</option>
-                                {deviceTypes.map((type) => <option value={type.id} key={type.id}>{type.id}</option>)}
+                                <DeviceTypeOptions deviceTypes={deviceTypes} />
                             </select>
                         </div>
                         {selectedType && <>
@@ -962,7 +940,7 @@ const DeviceTypesPage: React.FC = () => {
                         <label htmlFor="widgets-type-select">Device type</label>
                         <select id="widgets-type-select" value={selectedTypeId} onChange={(event) => handleSelectedTypeChange(event.target.value)}>
                             <option value="">Select a device type</option>
-                            {deviceTypes.map((type) => <option key={type.id} value={type.id}>{type.id}</option>)}
+                            <DeviceTypeOptions deviceTypes={deviceTypes} />
                         </select>
                     </div>
                     {selectedType && <DeviceTypeWidgetsEditor key={selectedType.id} deviceTypeId={selectedType.id}

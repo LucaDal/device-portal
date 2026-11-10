@@ -17,7 +17,8 @@ process.env.JWT_SECRET = crypto.randomBytes(32).toString('hex');
 process.env.DEVICE_PROPERTIES_ENCRYPTION_KEY = crypto.randomBytes(32).toString('hex');
 process.env.MQTT_DYNSEC_ENABLED = 'true';
 process.env.MQTT_DYNSEC_USERNAME = 'dp-sync';
-process.env.MQTT_DYNSEC_BACKEND_PASSWORD = crypto.randomBytes(32).toString('hex');
+process.env.MQTT_BROKER_USERNAME = 'dp-backend';
+process.env.MQTT_BROKER_PASSWORD = crypto.randomBytes(32).toString('hex');
 process.env.MQTT_PUBLIC_HOST = 'mqtt.example.test';
 
 require('ts-node').register({ project: path.join(__dirname, '../tsconfig.json'), transpileOnly: true, preferTsExts: true });
@@ -37,8 +38,8 @@ const { requireDeviceCodeSecret } = require('../src/middleware/deviceAuth.ts');
 const { DeviceTypeController } = require('../src/controllers/deviceTypeController.ts');
 const { DeviceController } = require('../src/controllers/deviceController.ts');
 const { getDeviceDashboardWidgets, buildDeviceDashboardWidgetAction } = require('../src/services/deviceDashboardService.ts');
-const { getDeviceMqttTopicMap, syncGeneratedMqttAclRulesForDevice, resolveDeviceTypeMqttTopicsForDevice } = require('../src/utils/deviceTypeMqtt.ts');
-const { brokerSettingsView, loadBrokerSettings, saveBrokerSettings, brokerClientOptions } = require('../src/utils/mqttBrokerSettings.ts');
+const { getDeviceMqttTopicsByAction, syncGeneratedMqttAclRulesForDevice, resolveDeviceTypeMqttTopicsForDevice } = require('../src/utils/deviceTypeMqtt.ts');
+const { brokerSettingsView, loadBrokerSettings, brokerClientOptions } = require('../src/utils/mqttBrokerSettings.ts');
 const { generateToken } = require('../src/utils/jwt.ts');
 const express = require('express');
 
@@ -49,6 +50,18 @@ DB.prepare("INSERT INTO device_types(id, firmware_version, firmware_build, mqtt_
 for (const code of ['A', 'B']) {
   DB.prepare("INSERT INTO devices (name, code, device_type_id, owner_id, activated, device_secret_hash) VALUES ('Fixture device', ?, 'test', ?, 1, 'test')").run(code, owner);
   syncGeneratedMqttAclRulesForDevice(code);
+}
+
+function brokerEnvironment(values) {
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+  return () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  };
 }
 
 function response() {
@@ -89,7 +102,7 @@ before(async () => {
     });
   });
   url = `mqtt://127.0.0.1:${port}`;
-  process.env.MQTT_DYNSEC_URL = url;
+  process.env.MQTT_BROKER_URL = url;
   process.env.MQTT_DYNSEC_PASSWORD = adminPassword;
   control = new MqttDynsecClient(url, { username: 'dp-sync', password: adminPassword });
   service = new MqttDynsecService(control);
@@ -147,15 +160,24 @@ test('device provisioning requires HTTPS, enabled devices and a non-cacheable re
     () => assert.fail('A device must not provision credentials for another device'));
   assert.equal(unauthorized.code, 401);
   const insecure = response();
-  MqttDynsecController.deviceCredentials({ secure: false, deviceAuth: { deviceCode: 'A' } }, insecure);
+  MqttDynsecController.deviceConfiguration({ secure: false, deviceAuth: { deviceCode: 'A' } }, insecure);
   assert.equal(insecure.code, 403);
   assert.equal(insecure.body.password, undefined);
   const secure = response();
-  MqttDynsecController.deviceCredentials({ secure: true, deviceAuth: { deviceCode: 'A' } }, secure);
+  MqttDynsecController.deviceConfiguration({ secure: true, deviceAuth: { deviceCode: 'A' } }, secure);
   assert.equal(secure.code, 200);
   assert.equal(secure.headers['Cache-Control'], 'no-store');
   assert.equal(secure.body.username, mqttDeviceUsername('A'));
   assert.equal(secure.body.password, getMqttDevicePassword('A'));
+  assert.equal(secure.body.schemaVersion, 3);
+  assert.deepEqual(brokerSettingsView().publicEndpoint, {
+    protocol: secure.body.protocol, host: secure.body.host, port: secure.body.port,
+  });
+  assert.deepEqual(secure.body.topics, {
+    publish: { availability: 'devices/A/telemetry/availability', telemetry: 'devices/A/telemetry/#' },
+    subscribe: { commands: 'devices/A/commands/#' },
+    all: {},
+  });
 });
 
 test('queue changes roll back with device transactions and retain deletion tombstones', async () => {
@@ -197,7 +219,7 @@ test('real broker permits own topics, rejects other devices and delivers retaine
   await assert.rejects(device.subscribeAsync('$CONTROL/#', { qos: 1 }));
   await device.publishAsync('devices/A/telemetry/state', '{"content":{"relay":false}}', { qos: 1, retain: true });
   await assert.rejects(device.publishAsync('devices/B/telemetry/state', 'invalid', { qos: 1 }));
-  const backend = await connectAsync(url, { username: 'dp-backend', password: process.env.MQTT_DYNSEC_BACKEND_PASSWORD,
+  const backend = await connectAsync(url, { username: 'dp-backend', password: process.env.MQTT_BROKER_PASSWORD,
     clientId: 'test-data-client', protocolVersion: 5, reconnectPeriod: 0 });
   clients.push(backend);
   backend.on('error', () => {});
@@ -250,7 +272,7 @@ test('rotation replaces credentials and revocation disconnects an already connec
   await service.drain();
   await disconnected;
   const res = response();
-  MqttDynsecController.deviceCredentials({ secure: true, deviceAuth: { deviceCode: 'B' } }, res);
+  MqttDynsecController.deviceConfiguration({ secure: true, deviceAuth: { deviceCode: 'B' } }, res);
   assert.equal(res.code, 403);
   await assert.rejects(connectAsync(url, { username: mqttDeviceUsername('B'), password, clientId: 'B', reconnectPeriod: 0 }));
 });
@@ -347,7 +369,7 @@ test('MQTT opt-out removes credentials, actions, OTA topics and user subscriptio
   assert.equal(res.code, 200);
   assert.equal(getDeviceDashboardWidgets('A', user).widgets.length, 0);
   assert.throws(() => buildDeviceDashboardWidgetAction('A', 'relay', { state: true }, user), (error) => error.status === 409);
-  assert.deepEqual(getDeviceMqttTopicMap('A'), {});
+  assert.deepEqual(getDeviceMqttTopicsByAction('A'), { publish: {}, subscribe: {}, all: {} });
   assert.equal(canUserAccessMqttTopic(owner, 'subscribe', 'devices/A/telemetry/state'), false);
   const list = response();
   DeviceController.list({ user: admin }, list);
@@ -355,7 +377,7 @@ test('MQTT opt-out removes credentials, actions, OTA topics and user subscriptio
   assert.equal(device.mqtt_available, false);
   assert.equal(device.type_mqttTopics, '[]');
   const provisioning = response();
-  MqttDynsecController.deviceCredentials({ secure: true, deviceAuth: { deviceCode: 'A' } }, provisioning);
+  MqttDynsecController.deviceConfiguration({ secure: true, deviceAuth: { deviceCode: 'A' } }, provisioning);
   assert.equal(provisioning.code, 403);
   await service.drain();
   assert.equal((await control.request({ command: 'getClient', username: mqttDeviceUsername('A') }, true)).error, 'Client not found');
@@ -379,24 +401,25 @@ test('new types default to MQTT off and cannot be overridden by a single device'
   assert.equal(DB.prepare("SELECT 1 FROM mqtt_dynsec_queue WHERE device_code = 'NO-MQTT'").get(), undefined);
 });
 
-test('broker passwords are never returned; standalone saves encrypt and preserve them', () => {
-  const managed = brokerSettingsView();
-  assert.equal(managed.managed, true);
-  assert.equal(managed.password, undefined);
-  assert.throws(() => saveBrokerSettings({ host: 'ignored' }), /managed/);
-  process.env.MQTT_DYNSEC_ENABLED = 'false';
+test('broker settings are read-only over HTTP in every deployment mode and never expose credentials', async () => {
+  const admin = DB.prepare('SELECT * FROM users WHERE email = ?').get(process.env.ADMIN_EMAIL);
+  const headers = { Authorization: 'Bearer ' + generateToken(admin), 'Content-Type': 'application/json' };
   try {
-    const input = { host: 'localhost', port: 1883, protocol: 'mqtt', username: 'portal', password: 'broker-test-secret' };
-    const view = saveBrokerSettings(input);
-    assert.equal(view.password, undefined);
-    assert.equal(view.passwordSet, true);
-    const stored = DB.prepare("SELECT value FROM app_settings WHERE key = 'mqtt_broker_settings'").get().value;
-    assert.ok(!stored.includes(input.password));
-    assert.equal(loadBrokerSettings().password, input.password);
-    saveBrokerSettings({ ...input, password: '' });
-    assert.equal(loadBrokerSettings().password, input.password);
-    saveBrokerSettings({ ...input, password: null });
-    assert.equal(loadBrokerSettings().password, '');
+    for (const enabled of ['true', 'false']) {
+      process.env.MQTT_DYNSEC_ENABLED = enabled;
+      const response = await fetch(apiUrl + '/manage/settings/mqtt', { headers });
+      assert.equal(response.status, 200);
+      const view = await response.json();
+      assert.equal(view.connection.username, 'dp-backend');
+      assert.equal(view.dynamicSecurity, enabled === 'true');
+      assert.equal(view.passwordSet, true);
+      assert.ok(!JSON.stringify(view).includes(process.env.MQTT_BROKER_PASSWORD));
+      const denied = await fetch(apiUrl + '/manage/settings/mqtt', { method: 'PUT', headers,
+        body: JSON.stringify({ host: 'attacker.example.test', password: 'ignored' }) });
+      assert.equal(denied.status, 404);
+      assert.equal(loadBrokerSettings().password, process.env.MQTT_BROKER_PASSWORD);
+      assert.equal(DB.prepare('SELECT COUNT(*) AS count FROM app_settings').get().count, 0);
+    }
   } finally { process.env.MQTT_DYNSEC_ENABLED = 'true'; }
 });
 
@@ -411,23 +434,17 @@ test('topic matching enforces MQTT system-topic and wildcard rules', () => {
   assert.equal(mqttTopicMatches('devices/#/state', 'devices/A/state'), false);
 });
 
-test('TLS uses the system trust store by default and accepts explicit insecure mode without a CA', () => {
-  process.env.MQTT_DYNSEC_ENABLED = 'false';
+test('TLS uses the system trust store and always verifies the server', () => {
+  const restore = brokerEnvironment({ MQTT_DYNSEC_ENABLED: 'false', MQTT_BROKER_URL: 'mqtts://localhost:8883',
+    MQTT_BROKER_CA_FILE: undefined, MQTT_BROKER_CLIENT_CERT_FILE: undefined, MQTT_BROKER_CLIENT_KEY_FILE: undefined });
   try {
-    const input = { host: 'localhost', port: 8883, protocol: 'mqtts', password: null };
-    saveBrokerSettings(input);
-    let options = brokerClientOptions(loadBrokerSettings());
+    const options = brokerClientOptions(loadBrokerSettings());
     assert.equal(options.rejectUnauthorized, true);
     assert.equal(options.ca, undefined);
     assert.equal(options.protocol, 'mqtts');
-    saveBrokerSettings({ ...input, allowInsecureTls: true });
-    options = brokerClientOptions(loadBrokerSettings());
-    assert.equal(options.rejectUnauthorized, false);
-    assert.equal(options.ca, undefined);
-    assert.throws(() => saveBrokerSettings({ ...input, host: 'mqtt://localhost' }), /hostname/);
-    assert.throws(() => saveBrokerSettings({ ...input, allowInsecureTls: 'false' }), /boolean/);
-    assert.throws(() => saveBrokerSettings({ ...input, clientCertFile: '/missing/cert' }), /together/);
-  } finally { process.env.MQTT_DYNSEC_ENABLED = 'true'; }
+    process.env.MQTT_BROKER_CLIENT_CERT_FILE = '/missing/cert';
+    assert.throws(() => loadBrokerSettings(), /provided together/);
+  } finally { restore(); }
 });
 
 test('new devices generate their code and inherit type widgets without copying properties', () => {
@@ -479,6 +496,11 @@ test('linked topics preserve local widget keys, isolate owners, and reject inval
   const resolved = resolveDeviceTypeMqttTopicsForDevice('LINK-SOURCE');
   assert.equal(resolved.find((topic) => topic.key === 'monitor').resolvedTopic, `owners/${owner}/link-target/+/state`);
   assert.equal(resolved.find((topic) => topic.key === 'control').resolvedTopic, `owners/${owner}/link-target/command`);
+  assert.deepEqual(getDeviceMqttTopicsByAction('LINK-SOURCE'), {
+    publish: { availability: 'devices/LINK-SOURCE/telemetry/availability', control: `owners/${owner}/link-target/command` },
+    subscribe: { monitor: `owners/${owner}/link-target/+/state` },
+    all: {},
+  });
   syncGeneratedMqttUserAclRulesForUser(owner);
   assert.equal(canUserAccessMqttTopic(owner, 'publish', `owners/${owner}/link-target/LINK-OWN/state`), true);
   assert.equal(canUserAccessMqttTopic(owner, 'publish', `owners/${otherOwner}/link-target/LINK-OTHER/state`), false);
@@ -546,7 +568,7 @@ test('administrator diagnostics read the applied broker ACL without exposing cre
 });
 
 test('MQTT.js publish delivers JSON content and rejects wildcard publish topics', async () => {
-  const monitor = await connectAsync(url, { username: 'dp-backend', password: process.env.MQTT_DYNSEC_BACKEND_PASSWORD,
+  const monitor = await connectAsync(url, { username: 'dp-backend', password: process.env.MQTT_BROKER_PASSWORD,
     clientId: 'test-publish-monitor', protocolVersion: 5, reconnectPeriod: 0 });
   clients.push(monitor);
   monitor.on('error', () => {});
@@ -707,7 +729,7 @@ test('request logging never logs credentials and malformed cookies do not crash 
   assert.equal(readAuthToken({ headers: { cookie: 'bad=%E0%A4%A; device_portal_session=valid-token' } }), 'valid-token');
 });
 
-test('TLS connections verify a custom CA, reject untrusted certificates, and support explicit insecure mode', async () => {
+test('TLS connections reject untrusted certificates and accept an explicit private CA', async () => {
   const listener = net.createServer();
   await new Promise((resolve) => listener.listen(0, '127.0.0.1', resolve));
   const port = listener.address().port;
@@ -719,7 +741,8 @@ test('TLS connections verify a custom CA, reject untrusted certificates, and sup
   const config = path.join(temporary, 'tls.conf');
   fs.writeFileSync(config, `user ${os.userInfo().username}\nlistener ${port} 127.0.0.1\nallow_anonymous true\ncertfile ${cert}\nkeyfile ${key}\n`);
   const tlsBroker = spawn('mosquitto', ['-c', config], { stdio: ['ignore', 'pipe', 'pipe'] });
-  process.env.MQTT_DYNSEC_ENABLED = 'false';
+  const restore = brokerEnvironment({ MQTT_DYNSEC_ENABLED: 'false', MQTT_BROKER_URL: `mqtts://127.0.0.1:${port}`,
+    MQTT_BROKER_USERNAME: '', MQTT_BROKER_PASSWORD: '', MQTT_BROKER_PASSWORD_FILE: undefined, MQTT_BROKER_CA_FILE: undefined });
   try {
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('TLS broker did not start')), 5000);
@@ -731,17 +754,13 @@ test('TLS connections verify a custom CA, reject untrusted certificates, and sup
       });
       tlsBroker.once('exit', () => { clearTimeout(timer); reject(new Error('TLS broker stopped')); });
     });
-    const input = { host: '127.0.0.1', protocol: 'mqtts', port, password: null };
-    saveBrokerSettings(input);
     await assert.rejects(connectAsync(brokerClientOptions(loadBrokerSettings())), /self.signed|certificate/i);
-    for (const variant of [{ caFile: cert }, { allowInsecureTls: true }]) {
-      saveBrokerSettings({ ...input, ...variant });
-      const client = await connectAsync(brokerClientOptions(loadBrokerSettings()));
-      assert.equal(client.connected, true);
-      await client.endAsync(true);
-    }
+    process.env.MQTT_BROKER_CA_FILE = cert;
+    const client = await connectAsync(brokerClientOptions(loadBrokerSettings()));
+    assert.equal(client.connected, true);
+    await client.endAsync(true);
   } finally {
-    process.env.MQTT_DYNSEC_ENABLED = 'true';
+    restore();
     if (tlsBroker.exitCode === null) { const closed = once(tlsBroker, 'exit'); tlsBroker.kill('SIGTERM'); await closed; }
   }
 });

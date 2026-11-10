@@ -8,14 +8,12 @@ import {
     parseDevicePropertyMap,
     parseSavedPropertyMap,
 } from "@shared/types/properties";
-import { DeviceTypeMqttTopic, parseDeviceTypeMqttTopics } from "@shared/types/device_type_mqtt";
 
 export type GenericPropertyRow = PropertyRow & { value: string };
 export type DeviceTypePropertyEditorRow = GenericPropertyRow & { isGlobal: boolean };
 
 export type DeviceTypePropertiesFormState = {
     properties: DeviceTypePropertyEditorRow[];
-    mqttTopics: DeviceTypeMqttTopic[];
 };
 
 type BuildPropertiesPayloadResult =
@@ -49,12 +47,8 @@ export const parseGenericProperties = (raw: unknown): GenericPropertyRow[] => {
     }));
 };
 
-export const parseMqttTopics = (raw: unknown): DeviceTypeMqttTopic[] => {
-    return parseDeviceTypeMqttTopics(raw);
-};
-
 export const parseDeviceTypePropertiesForm = (
-    device: Pick<DeviceType, "deviceProperties" | "genericProperties" | "mqttTopics">
+    device: Pick<DeviceType, "deviceProperties" | "genericProperties">
 ): DeviceTypePropertiesFormState => ({
     properties: [
         ...parseDeviceProperties(device.deviceProperties).map((row) => ({
@@ -69,7 +63,6 @@ export const parseDeviceTypePropertiesForm = (
             isGlobal: true,
         })),
     ],
-    mqttTopics: parseMqttTopics(device.mqttTopics),
 });
 
 const castGenericValue = (

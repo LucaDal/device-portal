@@ -1,0 +1,12 @@
+# Include inside Nginx's stream block, outside http.
+# Adjust the certificate paths, public port and upstream for your deployment.
+server {
+    listen 8883 ssl;
+    ssl_certificate /etc/letsencrypt/live/mqtt.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mqtt.example.org/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    proxy_pass 127.0.0.1:1883;
+    proxy_connect_timeout 5s;
+    proxy_timeout 1h;
+}

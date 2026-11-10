@@ -13,6 +13,6 @@ router.get(
     requireDeviceCodeSecret,
     DeviceConfigurationController.getConfiguration
 );
-router.get("/mqtt-credentials", requireDeviceCodeSecret, MqttDynsecController.deviceCredentials);
+router.get("/mqtt-configuration", requireDeviceCodeSecret, MqttDynsecController.deviceConfiguration);
 
 export default router;

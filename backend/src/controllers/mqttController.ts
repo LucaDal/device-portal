@@ -64,7 +64,7 @@ export async function publishForAuthenticatedUser(input: MqttPublishInput, authU
         return {
             ok: false as const,
             status: 400,
-            body: { error: "MQTT broker settings not configured. An administrator can configure them in Settings." },
+            body: { error: "MQTT broker connection is not configured in the server environment." },
         };
     }
 
